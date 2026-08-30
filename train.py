@@ -53,7 +53,7 @@ def create_train_state(rng, model, dummy_input):
     if os.path.exists("pretrained_embeds.npy") and getattr(model.config, 'freeze_embeddings', False):
         print("Injecting pretrained embeddings...")
         embeds = np.load("pretrained_embeds.npy")
-        params = params.unfreeze()
+        params = flax.core.unfreeze(params)
         params['embed_tokens']['embedding'] = jnp.array(embeds)
         params = flax.core.freeze(params)
 
@@ -72,10 +72,12 @@ def create_train_state(rng, model, dummy_input):
             'trainable': optax.adamw(lr_schedule, weight_decay=0.1)
         }
         def map_params(path, _):
+            # path is a tuple of strings, e.g., ('embed_tokens', 'embedding')
             if 'embed_tokens' in path: return 'frozen'
             return 'trainable'
-        flat_params = flax.traverse_util.flatten_dict(params, sep='/')
+        flat_params = flax.traverse_util.flatten_dict(params)
         param_labels = flax.traverse_util.unflatten_dict({k: map_params(k, v) for k, v in flat_params.items()})
+        param_labels = flax.core.freeze(param_labels)
         base_tx = optax.multi_transform(partition_optimizers, param_labels)
     else:
         base_tx = optax.adamw(lr_schedule, weight_decay=0.1)
