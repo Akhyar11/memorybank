@@ -77,7 +77,7 @@ def greedy_generate(model, variables, tokenizer, prompt: str,
     mem    = variables.get('memory', {})
 
     for _ in range(max_new_tokens):
-        (logits, _, _, _), mutated = model.apply(
+        (logits, _, _, _, _), mutated = model.apply(
             {'params': variables['params'], 'memory': mem},
             tokens,
             mutable=['memory'],
