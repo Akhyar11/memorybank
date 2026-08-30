@@ -30,6 +30,7 @@ SEQ_LEN          = 1024
 LOCAL_BATCH_SIZE = 4      # per device
 GRAD_ACCUM_STEPS = 4      # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL     = 10
+NUM_EPOCHS       = 2
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MAMoETrainState(train_state.TrainState):
@@ -234,43 +235,47 @@ def main():
         
     dataloader = conversation_generator(data_paths, tok_path, total_batch_size, SEQ_LEN)
 
-    print("Starting Phase 2: Fine-Tuning (1 Epoch, per-conversation memory reset)...\n")
+    print(f"Starting Phase 2: Fine-Tuning ({NUM_EPOCHS} Epochs, per-conversation memory reset)...\n")
     start_time    = time.time()
     last_log_time = start_time
     total_tokens  = 0
     step          = 0
     conv_resets   = 0
 
-    for batch, should_reset in dataloader:
-        if should_reset:
-            # Reset memory di batas antar conversation — inilah yang benar
-            memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
-            conv_resets += 1
-            continue
-
-        step += 1
-        sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-        state, memory_state, metrics = finetune_step(state, memory_state, sharded)
-        total_tokens += total_batch_size * SEQ_LEN
-
-        if step % LOG_INTERVAL == 0:
-            now           = time.time()
-            tok_per_sec   = (total_batch_size * SEQ_LEN * LOG_INTERVAL) / (now - last_log_time)
-            elapsed       = int(now - start_time)
-            ce_val        = float(unreplicate(metrics['ce_loss']))
-            aux_val       = float(unreplicate(metrics['aux_loss']))
-            expert_load   = np.array(unreplicate(metrics['expert_load']))
-            expert_str    = ' '.join(f'E{i}:{v*100:.0f}%' for i, v in enumerate(expert_load))
-            print(
-                f"Step {step:06d} | "
-                f"CE {ce_val:.4f} | "
-                f"Aux {aux_val:.4f} | "
-                f"Speed {tok_per_sec:>8,.0f} tok/s | "
-                f"Conv resets: {conv_resets} | "
-                f"Elapsed {elapsed//60}m {elapsed%60:02d}s"
-            )
-            print(f"          Expert load: [{expert_str}]")
-            last_log_time = now
+    for epoch in range(1, NUM_EPOCHS + 1):
+        print(f"\n========== EPOCH {epoch}/{NUM_EPOCHS} ==========")
+        dataloader = conversation_generator(data_paths, tok_path, total_batch_size, SEQ_LEN)
+        
+        for batch, should_reset in dataloader:
+            if should_reset:
+                # Reset memory di batas antar conversation — inilah yang benar
+                memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
+                conv_resets += 1
+                continue
+    
+            step += 1
+            sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            state, memory_state, metrics = finetune_step(state, memory_state, sharded)
+            total_tokens += total_batch_size * SEQ_LEN
+    
+            if step % LOG_INTERVAL == 0:
+                now           = time.time()
+                tok_per_sec   = (total_batch_size * SEQ_LEN * LOG_INTERVAL) / (now - last_log_time)
+                elapsed       = int(now - start_time)
+                ce_val        = float(unreplicate(metrics['ce_loss']))
+                aux_val       = float(unreplicate(metrics['aux_loss']))
+                expert_load   = np.array(unreplicate(metrics['expert_load']))
+                expert_str    = ' '.join(f'E{i}:{v*100:.0f}%' for i, v in enumerate(expert_load))
+                print(
+                    f"Epoch {epoch} | Step {step:06d} | "
+                    f"CE {ce_val:.4f} | "
+                    f"Aux {aux_val:.4f} | "
+                    f"Speed {tok_per_sec:>8,.0f} tok/s | "
+                    f"Conv resets: {conv_resets} | "
+                    f"Elapsed {elapsed//60}m {elapsed%60:02d}s"
+                )
+                print(f"          Expert load: [{expert_str}]")
+                last_log_time = now
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 2 Complete!  "
