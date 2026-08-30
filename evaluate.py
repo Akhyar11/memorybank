@@ -22,6 +22,7 @@ from typing import List, Dict, Any, Optional
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 
 # ── Optimasi ───────────────────────────────────────────────────────────────
 jax.config.update('jax_default_matmul_precision', 'bfloat16')
@@ -55,9 +56,31 @@ def load_model_and_tokenizer():
     model  = MAMoEForCausalLM(config=config)
     rng    = jax.random.PRNGKey(0)
 
-    # Init params (in real scenario: load from checkpoint)
+    # Init params
     dummy = jnp.ones((1, 64), dtype=jnp.int32)
     variables = model.init(rng, dummy)
+    
+    # Load from checkpoint
+    ckpt_dir = '/kaggle/working/checkpoints/phase2'
+    if not os.path.exists(ckpt_dir):
+        ckpt_dir = '/kaggle/working/checkpoints/phase1'
+        
+    if os.path.exists(ckpt_dir):
+        print(f"   Loading checkpoint from {ckpt_dir}...")
+        checkpointer = ocp.StandardCheckpointer()
+        
+        # Ekstrak params
+        if 'params' in variables:
+            params = variables['params']
+            params = checkpointer.restore(os.path.abspath(ckpt_dir), target=params)
+            # Create a new variables dict (FrozenDict is immutable)
+            variables = {'params': params, 'memory': variables.get('memory', {})}
+        else:
+            variables = checkpointer.restore(os.path.abspath(ckpt_dir), target=variables)
+            
+        print("✅ Checkpoint Loaded successfully!")
+    else:
+        print("⚠️ WARNING: No checkpoint found! Evaluating with RANDOM weights!")
 
     print(f"✅ Model initialized (evaluation mode)")
     print(f"   Tokenizer: {tok_path}")
