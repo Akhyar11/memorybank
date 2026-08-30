@@ -94,28 +94,56 @@ def load_model_and_tokenizer():
 
 def greedy_generate(model, variables, tokenizer, prompt: str,
                     max_new_tokens: int = MAX_NEW_TOKENS) -> str:
-    """Auto-regressive greedy decoding dengan Memory Bank."""
+    """Auto-regressive greedy decoding dengan Memory Bank (Padded + JIT for GPU)."""
     enc    = tokenizer.encode(prompt)
-    ids    = enc.ids[-512:]          # truncate agar tidak OOM
-    tokens = jnp.array([ids], dtype=jnp.int32)
-    mem    = variables.get('memory', {})
+    ids    = enc.ids[-256:]          # truncate agar tidak OOM
+    
+    # Pad to fixed length 512
+    MAX_LEN = 256 + max_new_tokens
+    padded_ids = ids + [0] * (MAX_LEN - len(ids))
+    tokens = jnp.array([padded_ids], dtype=jnp.int32)
+    seq_len = len(ids)
+    
+    mem = variables.get('memory', {})
+    params = variables['params']
 
-    for _ in range(max_new_tokens):
+    @jax.jit
+    def generate_step(tokens_in, seq_len_in, mem_in):
+        # Create an additive attention mask for padding: 0 for valid, -1e9 for padding
+        mask = jnp.arange(MAX_LEN) < seq_len_in
+        mask = jnp.where(mask, 0.0, -1e9)
+        mask = mask.reshape((1, 1, 1, MAX_LEN))
+        
         (logits, _, _, _, _), mutated = model.apply(
-            {'params': variables['params'], 'memory': mem},
-            tokens,
+            {'params': params, 'memory': mem_in},
+            tokens_in,
+            attention_mask=mask,
             mutable=['memory'],
         )
-        mem      = mutated.get('memory', mem)
-        next_tok = int(jnp.argmax(logits[0, -1]))
-        tokens   = jnp.concatenate([tokens, jnp.array([[next_tok]])], axis=1)
+        # Logits has shape (1, MAX_LEN, vocab_size). We want the logit at seq_len_in - 1
+        last_logit = logits[0, seq_len_in - 1]
+        next_tok = jnp.argmax(last_logit).astype(jnp.int32)
+        
+        # Update the token array at seq_len_in
+        # tokens_out = tokens_in.at[0, seq_len_in].set(next_tok)
+        # Using dynamic update slice is safer in JAX
+        tokens_out = jax.lax.dynamic_update_slice(tokens_in, jnp.array([[next_tok]]), (0, seq_len_in))
+        
+        mem_out = mutated.get('memory', mem_in)
+        return tokens_out, next_tok, mem_out
 
-        # Berhenti jika EOS atau newline
+    # Now run the generation loop
+    for _ in range(max_new_tokens):
+        tokens, next_tok, mem = generate_step(tokens, seq_len, mem)
+        next_tok = int(next_tok)
+        seq_len += 1
+        
         decoded = tokenizer.decode([next_tok])
         if decoded in ('\n', '</s>', '[EOS]', '<eos>'):
             break
 
-    generated = tokenizer.decode(tokens[0, len(ids):].tolist())
+    # Extract the generated portion
+    generated = tokenizer.decode(tokens[0, len(ids):seq_len].tolist())
     return generated.strip()
 
 
