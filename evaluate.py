@@ -320,13 +320,17 @@ def main():
     model, variables, tokenizer = load_model_and_tokenizer()
 
     # Pilih dataset
-    if os.path.exists(EVAL_JSONL):
-        episodes = load_episodes(EVAL_JSONL)
-        print(f"📂 Dataset: {EVAL_JSONL} ({len(episodes)} episodes)")
-    else:
-        print(f"❌ Eval dataset tidak ditemukan: {EVAL_JSONL}")
-        sys.exit(1)
+    eval_kaggle = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train.jsonl'
+    eval_local  = 'data/memorybench_train.jsonl'
+    eval_path   = eval_kaggle if os.path.exists(eval_kaggle) else eval_local
 
+    if os.path.exists(eval_path):
+        episodes = load_episodes(eval_path)
+        print(f"📂 Dataset: {eval_path} ({len(episodes)} episodes)")
+    else:
+        print(f"⚠️ Eval dataset tidak ditemukan di {eval_path}. Fase evaluasi dilewati.")
+        print("💡 Catatan: Harap upload memorybench_train.jsonl ke Kaggle Dataset (dataset-chat) jika Anda ingin evaluasi berjalan.")
+        sys.exit(0)
     # Batasi jumlah episode untuk evaluasi cepat (hapus batas untuk full eval)
     MAX_EVAL = None   # None = evaluasi semua
 
