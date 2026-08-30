@@ -112,12 +112,13 @@ def resolve_data_paths():
     raise FileNotFoundError("Tidak ada dataset ditemukan!")
 
 def npy_epoch_generator(npy_path, total_batch_size, seq_len):
-    """Load npy sekali ke RAM, yield batch acak — SANGAT CEPAT."""
-    tokens = np.load(npy_path, mmap_mode='r')          # memory-mapped
+    """Load npy PENUH ke RAM (bukan mmap), yield batch acak — MAKSIMAL CEPAT."""
+    print(f"   Loading npy fully into RAM...")
+    tokens = np.load(npy_path)                         # full RAM load, no disk I/O during training
     total  = len(tokens)
     usable = (total // seq_len) * seq_len
     arr    = tokens[:usable].reshape(-1, seq_len)
-    print(f"   Dataset: {arr.shape[0]:,} sequences × {seq_len} tokens")
+    print(f"   Dataset: {arr.shape[0]:,} sequences × {seq_len} tokens ({arr.nbytes/1e6:.0f} MB in RAM)")
     idx = np.random.permutation(len(arr))
     for i in range(0, len(idx) - total_batch_size, total_batch_size):
         yield arr[idx[i : i + total_batch_size]]
@@ -176,8 +177,14 @@ def main():
     dummy  = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
     print("Initializing model weights & optimizer...")
     state, memory_state = create_train_state(rng, model, dummy)
+
+    # Pre-compute empty memory template ONCE — dipakai ulang saat reset
+    # Jauh lebih cepat daripada memanggil model.init() setiap N step
+    empty_memory_template = jax.tree_util.tree_map(jnp.zeros_like, memory_state)
+
     state        = replicate(state)
     memory_state = replicate(memory_state)
+    empty_memory_replicated = replicate(empty_memory_template)
     print("Done.\n")
 
     # Pilih sumber data
@@ -219,7 +226,8 @@ def main():
             last_log_time = now
 
         if step % RESET_INTERVAL == 0:
-            memory_state = replicate(get_empty_memory_state(rng, model, dummy))
+            # Gunakan template yang sudah di-pre-compute — O(1), tidak re-trace JAX graph
+            memory_state = empty_memory_replicated
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")

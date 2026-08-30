@@ -147,9 +147,13 @@ def main():
     state, memory_state = create_train_state(rng, config, model, dummy_input)
     
     print("-> (Placeholder) Loaded Phase 1 Pre-trained Weights")
+
+    # Pre-compute empty memory template ONCE
+    empty_memory_template = jax.tree_util.tree_map(jnp.zeros_like, memory_state)
     
-    state = replicate(state)
+    state        = replicate(state)
     memory_state = replicate(memory_state)
+    empty_memory_replicated = replicate(empty_memory_template)
     
     dataset_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
     tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
@@ -191,8 +195,7 @@ def main():
             last_log_time = current_time
         
         if step % reset_interval == 0:
-            empty_memory = get_empty_memory_state(rng, config, model, dummy_input)
-            memory_state = replicate(empty_memory)
+            memory_state = empty_memory_replicated
             
     print("\nPhase 2 Fine-Tuning Execution Complete! 🚀")
 
