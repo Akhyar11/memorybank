@@ -27,9 +27,9 @@ def setup_environment():
     else:
         print("✅ JAX[CUDA12] installed successfully.")
     
-    # Step 3: Install remaining pipeline dependencies
+    # Step 3: Install remaining pipeline dependencies (force upgrade to match JAX 0.11.x)
     subprocess.run([
-        sys.executable, "-m", "pip", "install", "-q",
+        sys.executable, "-m", "pip", "install", "-q", "-U",
         "flax", "optax", "tokenizers", "pandas", "pyarrow", "fastparquet"
     ], check=True)
     print("✅ All dependencies ready.\n")
