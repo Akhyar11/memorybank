@@ -69,14 +69,15 @@ def load_model_and_tokenizer():
         print(f"   Loading checkpoint from {ckpt_dir}...")
         checkpointer = ocp.StandardCheckpointer()
         
-        # Ekstrak params
-        if 'params' in variables:
-            params = variables['params']
-            params = checkpointer.restore(os.path.abspath(ckpt_dir), target=params)
-            # Create a new variables dict (FrozenDict is immutable)
-            variables = {'params': params, 'memory': variables.get('memory', {})}
+        raw_state = checkpointer.restore(os.path.abspath(ckpt_dir), target=None)
+        
+        # Ekstrak params dari TrainState (yang memiliki 'step', 'params', 'opt_state')
+        if 'params' in raw_state:
+            params = raw_state['params']
         else:
-            variables = checkpointer.restore(os.path.abspath(ckpt_dir), target=variables)
+            params = raw_state
+            
+        variables = {'params': params, 'memory': variables.get('memory', {})}
             
         print("✅ Checkpoint Loaded successfully!")
     else:
