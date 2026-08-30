@@ -2,6 +2,38 @@ import subprocess
 import sys
 import os
 
+def setup_environment():
+    """Auto-fix JAX CUDA plugin mismatch on Kaggle, then install remaining deps."""
+    is_kaggle = os.path.exists('/kaggle')
+    if not is_kaggle:
+        print("⚙️  Local environment detected. Skipping JAX auto-fix.")
+        return
+
+    print("⚙️  Kaggle environment detected. Fixing JAX CUDA compatibility...")
+    
+    # Step 1: Remove the incompatible plugin and jaxlib
+    subprocess.run([
+        sys.executable, "-m", "pip", "uninstall", "-y",
+        "jax", "jaxlib", "jax-cuda12-plugin", "jax-cuda12-pjrt"
+    ], capture_output=True)
+    
+    # Step 2: Reinstall a clean, CUDA-12 compatible JAX bundle
+    result = subprocess.run([
+        sys.executable, "-m", "pip", "install", "-q", "-U", "jax[cuda12]"
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        print("⚠️  jax[cuda12] install failed, trying CPU-only JAX as fallback...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "jax"], check=True)
+    else:
+        print("✅ JAX[CUDA12] installed successfully.")
+    
+    # Step 3: Install remaining pipeline dependencies
+    subprocess.run([
+        sys.executable, "-m", "pip", "install", "-q",
+        "flax", "optax", "tokenizers", "pandas", "pyarrow", "fastparquet"
+    ], check=True)
+    print("✅ All dependencies ready.\n")
+
 def check_kaggle_environment():
     """Validates that Kaggle dataset paths exist before starting."""
     print("="*50)
@@ -49,6 +81,7 @@ def run_phase_2():
     print("✅ PHASE 2 COMPLETE!\n")
 
 if __name__ == "__main__":
+    setup_environment()
     check_kaggle_environment()
     run_phase_1()
     run_phase_2()
