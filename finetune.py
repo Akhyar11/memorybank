@@ -95,41 +95,53 @@ def conversation_generator(parquet_path, tok_path, total_batch_size, seq_len):
     """
     import pandas as pd
     from tokenizers import Tokenizer
+    import pyarrow.parquet as pq
 
     tokenizer = Tokenizer.from_file(tok_path)
-    df        = pd.read_parquet(parquet_path)
+    is_test = os.environ.get('QUICK_TEST') == '1'
+    conv_limit = 50 if is_test else float('inf')
+    conv_count = 0
 
     # Auto-detect text column
+    df_sample = pd.read_parquet(parquet_path, columns=None, engine='pyarrow')
     text_col = next(
         (c for c in ["messages", "text", "conversation", "prompt", "output", "content"]
-         if c in df.columns),
-        df.columns[0]
+         if c in df_sample.columns),
+        df_sample.columns[0]
     )
-    print(f"   Parquet text column: '{text_col}'  ({len(df):,} conversations)")
+    
+    print(f"   Parquet text column: '{text_col}'")
 
-    conversations = df[text_col].dropna().astype(str).tolist()
-
-    for group_start in range(0, len(conversations) - total_batch_size, total_batch_size):
-        group = conversations[group_start : group_start + total_batch_size]
-
-        # Tokenize semua conversation dalam grup ini
-        encoded  = tokenizer.encode_batch(group)
-        ids_list = [enc.ids for enc in encoded]
-        max_len  = max(len(ids) for ids in ids_list)
-
-        # Pad setiap conversation ke panjang yang sama (kelipatan seq_len)
-        padded_len = ((max_len + seq_len - 1) // seq_len) * seq_len
-        padded     = np.zeros((total_batch_size, padded_len), dtype=np.int32)
-        for i, ids in enumerate(ids_list):
-            padded[i, :len(ids)] = ids
-
-        # Yield chunk per seq_len (urutan dalam 1 conversation dijaga)
-        for chunk_start in range(0, padded_len, seq_len):
-            chunk = padded[:, chunk_start : chunk_start + seq_len]
-            yield chunk, False   # (batch, should_reset=False)
-
-        # Setelah 1 grup conversation selesai → reset memory
-        yield None, True         # sinyal: reset memory sekarang
+    buffer = []
+    parquet_file = pq.ParquetFile(parquet_path)
+    
+    for batch in parquet_file.iter_batches(batch_size=1000):
+        for row in batch.to_pylist():
+            if conv_count >= conv_limit:
+                if is_test:
+                    print("\n⚠️ QUICK_TEST MODE: Reached 50 conversations. Stopping.")
+                return
+            
+            # Simple conversion if list of dicts (for 'messages')
+            content = str(row[text_col])
+            tokens = tokenizer.encode(content).ids
+            buffer.append(tokens)
+            
+            if len(buffer) == total_batch_size:
+                # Pad and yield
+                max_len = max(len(ids) for ids in buffer)
+                padded_len = ((max_len + seq_len - 1) // seq_len) * seq_len
+                padded = np.zeros((total_batch_size, padded_len), dtype=np.int32)
+                for i, ids in enumerate(buffer):
+                    padded[i, :len(ids)] = ids
+                
+                for chunk_start in range(0, padded_len, seq_len):
+                    chunk = padded[:, chunk_start : chunk_start + seq_len]
+                    yield chunk, False
+                
+                yield None, True
+                buffer = []
+                conv_count += 1
 
 # ── Path Resolution ─────────────────────────────────────────────────────────
 def resolve_paths():

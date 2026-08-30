@@ -116,8 +116,14 @@ def resolve_data_paths():
 
 def npy_epoch_generator(npy_path, total_batch_size, seq_len):
     """Load npy PENUH ke RAM (bukan mmap), yield batch acak — MAKSIMAL CEPAT."""
-    print(f"   Loading npy fully into RAM...")
-    tokens = np.load(npy_path)                         # full RAM load, no disk I/O during training
+    print("Loading pre-tokenized dataset...")
+    tokens = np.load(npy_path)
+    
+    if os.environ.get('QUICK_TEST') == '1':
+        print("\n⚠️ QUICK_TEST MODE ENABLED! Truncating data to 10 steps...")
+        tokens = tokens[: total_batch_size * SEQ_LEN * 10]
+        
+    total_tokens_in_file = len(tokens)                   # full RAM load, no disk I/O during training
     total  = len(tokens)
     usable = (total // seq_len) * seq_len
     arr    = tokens[:usable].reshape(-1, seq_len)
