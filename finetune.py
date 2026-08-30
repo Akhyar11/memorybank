@@ -18,8 +18,10 @@ from mamoe.model import MAMoEForCausalLM
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_PARQUET  = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
-KAGGLE_TOK      = '/kaggle/input/datasets/akhyarsafrudin/tokenizer_hf/tokenizer.json'
+KAGGLE_JSONL    = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train_samples.jsonl'
+KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_PARQUET   = 'data/raw/t5gemma2_chat_multiturn.parquet'
+LOCAL_JSONL     = 'data/raw/memorybench_train_samples.jsonl'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -117,48 +119,55 @@ def finetune_step(state, memory_state, batch_inputs):
     return state, new_mem, {'loss': total_loss, 'ce_loss': ce_loss, 'aux_loss': aux_loss, 'expert_load': avg_f_i}
 
 # ── Data Loading — Per-Conversation ─────────────────────────────────────────
-def conversation_generator(parquet_path, tok_path, total_batch_size, seq_len):
+def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
     """
     Yield (batch, should_reset_memory).
-    - Memproses total_batch_size conversation secara parallel.
-    - Setelah setiap grup conversation selesai → yield (None, True) sebagai sinyal reset memory.
     """
     import pandas as pd
     from tokenizers import Tokenizer
     import pyarrow.parquet as pq
+    import json
+    import os
+    import numpy as np
 
     tokenizer = Tokenizer.from_file(tok_path)
     is_test = os.environ.get('QUICK_TEST') == '1'
     conv_limit = 50 if is_test else float('inf')
     conv_count = 0
-
-    # Auto-detect text column
-    df_sample = pd.read_parquet(parquet_path, columns=None, engine='pyarrow')
-    text_col = next(
-        (c for c in ["messages", "text", "conversation", "prompt", "output", "content"]
-         if c in df_sample.columns),
-        df_sample.columns[0]
-    )
-    
-    print(f"   Parquet text column: '{text_col}'")
-
     buffer = []
-    parquet_file = pq.ParquetFile(parquet_path)
-    
-    for batch in parquet_file.iter_batches(batch_size=1000):
-        for row in batch.to_pylist():
+
+    def get_rows(path):
+        if path.endswith('.parquet'):
+            df_sample = pd.read_parquet(path, columns=None, engine='pyarrow')
+            text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in df_sample.columns), df_sample.columns[0])
+            print(f"   Parquet text column: '{text_col}'")
+            parquet_file = pq.ParquetFile(path)
+            for batch in parquet_file.iter_batches(batch_size=1000):
+                for row in batch.to_pylist():
+                    yield str(row[text_col])
+        elif path.endswith('.jsonl'):
+            with open(path, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
+                if not first_line: return
+                first_obj = json.loads(first_line)
+                text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in first_obj), list(first_obj.keys())[0])
+                print(f"   JSONL text column: '{text_col}'")
+                f.seek(0)
+                for line in f:
+                    row = json.loads(line)
+                    yield str(row.get(text_col, ""))
+
+    for path in data_paths:
+        print(f"\nProcessing dataset: {path}")
+        for content in get_rows(path):
             if conv_count >= conv_limit:
-                if is_test:
-                    print("\n⚠️ QUICK_TEST MODE: Reached 50 conversations. Stopping.")
+                if is_test: print("\n⚠️ QUICK_TEST MODE: Reached 50 conversations. Stopping.")
                 return
             
-            # Simple conversion if list of dicts (for 'messages')
-            content = str(row[text_col])
             tokens = tokenizer.encode(content).ids
             buffer.append(tokens)
             
             if len(buffer) == total_batch_size:
-                # Pad and yield
                 max_len = max(len(ids) for ids in buffer)
                 padded_len = ((max_len + seq_len - 1) // seq_len) * seq_len
                 padded = np.zeros((total_batch_size, padded_len), dtype=np.int32)
@@ -218,8 +227,12 @@ def main():
     memory_state = replicate(memory_state)
     print("Done.\n")
 
-    parquet_path, tok_path = resolve_paths()
-    dataloader = conversation_generator(parquet_path, tok_path, total_batch_size, SEQ_LEN)
+    data_paths, tok_path = resolve_paths()
+    if not data_paths:
+        print("❌ Dataset tidak ditemukan!")
+        sys.exit(1)
+        
+    dataloader = conversation_generator(data_paths, tok_path, total_batch_size, SEQ_LEN)
 
     print("Starting Phase 2: Fine-Tuning (1 Epoch, per-conversation memory reset)...\n")
     start_time    = time.time()

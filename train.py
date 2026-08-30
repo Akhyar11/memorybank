@@ -21,7 +21,7 @@ from mamoe.model import MAMoEForCausalLM
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_TOKENS   = '/kaggle/working/vqfat_tokens.npy'
 KAGGLE_CSV      = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
-KAGGLE_TOK      = '/kaggle/input/datasets/akhyarsafrudin/tokenizer_hf/tokenizer.json'
+KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_TOKENS    = 'data/pretrain/vqfat_tokens.npy'
 LOCAL_CSV       = 'data/raw/vqfat_cosmopedia_id.csv'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
