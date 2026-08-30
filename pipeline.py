@@ -95,10 +95,21 @@ def run_phase_2():
         sys.exit(e.returncode)
     print("✅ PHASE 2 COMPLETE!\n")
 
+def run_phase_3():
+    print("📊 STARTING PHASE 3: EVALUATION (MemoryBench)")
+    print("Running evaluate.py...")
+    try:
+        subprocess.run([sys.executable, "evaluate.py"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Evaluation failed with error code {e.returncode}")
+        # Don't exit — evaluation failure shouldn't abort the pipeline
+    print("✅ PHASE 3 COMPLETE!\n")
+
 if __name__ == "__main__":
     setup_environment()
     check_kaggle_environment()
     run_pretokenize()
     run_phase_1()
     run_phase_2()
+    run_phase_3()
     print("🎉 FULL PIPELINE EXECUTION SUCCESSFUL!")
