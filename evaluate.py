@@ -49,6 +49,11 @@ TEMPERATURE    = 0.0   # greedy decoding untuk evaluasi deterministik
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_model_and_tokenizer():
+    devices = jax.devices()
+    print(f"🖥️  JAX Devices: {devices}")
+    if devices[0].platform == 'cpu':
+        print("❌ ERROR: JAX IS RUNNING ON CPU! Please run '!pip install -q -U \"jax[cuda12]\"' first!")
+        
     tok_path = KAGGLE_TOK if os.path.exists(KAGGLE_TOK) else LOCAL_TOK
     tokenizer = Tokenizer.from_file(tok_path)
 
