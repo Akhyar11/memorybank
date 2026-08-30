@@ -45,8 +45,8 @@ def create_train_state(rng, model, dummy_input):
     import flax
     import flax.traverse_util
     
-    dummy_eos = jnp.zeros((1,), dtype=jnp.int32)
-    variables      = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
+    dummy_eos = jnp.zeros((dummy_input.shape[0],), dtype=jnp.int32)
+    variables    = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
     params         = variables['params']
     memory_state   = variables.get('memory', {})
 
