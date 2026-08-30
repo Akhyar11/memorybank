@@ -231,6 +231,7 @@ def main():
     unreplicated_state = unreplicate(state)
     checkpointer = ocp.StandardCheckpointer()
     checkpointer.save(os.path.abspath(ckpt_dir), unreplicated_state, force=True)
+    checkpointer.wait_until_finished()
     print(f"✅ Checkpoint saved to: {ckpt_dir}")
 
 if __name__ == '__main__':
