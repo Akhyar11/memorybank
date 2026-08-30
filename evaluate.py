@@ -320,7 +320,7 @@ def main():
     model, variables, tokenizer = load_model_and_tokenizer()
 
     # Pilih dataset
-    eval_kaggle = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train.jsonl'
+    eval_kaggle = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train_samples.jsonl'
     eval_local  = 'data/memorybench_train.jsonl'
     eval_path   = eval_kaggle if os.path.exists(eval_kaggle) else eval_local
 
