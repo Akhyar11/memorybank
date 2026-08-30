@@ -84,22 +84,49 @@ def train_step(state, memory_state, batch_inputs):
     
     return state, new_memory_state, metrics
 
-def data_generator(file_path, batch_size, seq_len):
+def data_generator(file_path, tokenizer_path, batch_size, seq_len):
+    import pandas as pd
+    from tokenizers import Tokenizer
+    
+    if not os.path.exists(tokenizer_path):
+        print(f"Tokenizer not found at {tokenizer_path}.")
+        while True:
+            yield np.random.randint(0, 32000, size=(batch_size, seq_len), dtype=np.uint16)
+            
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    
     if not os.path.exists(file_path):
         print(f"Dataset not found at {file_path}. Generating dummy data for test.")
         while True:
             yield np.random.randint(0, 32000, size=(batch_size, seq_len), dtype=np.uint16)
             
-    data = np.load(file_path)
-    num_samples = data.shape[0]
-    indices = np.arange(num_samples)
-    
+    print(f"Streaming dataset from {file_path}...")
     while True:
-        np.random.shuffle(indices)
-        for i in range(0, num_samples, batch_size):
-            if i + batch_size <= num_samples:
-                batch_indices = indices[i:i+batch_size]
-                yield data[batch_indices]
+        # Stream CSV to avoid RAM OOM
+        for chunk in pd.read_csv(file_path, chunksize=10000):
+            text_column = "text"
+            for col in ["text", "prompt", "content", "completion", "text_clean", "article"]:
+                if col in chunk.columns:
+                    text_column = col
+                    break
+                    
+            texts = chunk[text_column].dropna().astype(str).tolist()
+            encoded = tokenizer.encode_batch(texts)
+            
+            all_tokens = []
+            for enc in encoded:
+                all_tokens.extend(enc.ids)
+                
+            total_chunks = len(all_tokens) // seq_len
+            all_tokens = np.array(all_tokens[:total_chunks * seq_len], dtype=np.uint16)
+            all_tokens = all_tokens.reshape((total_chunks, seq_len))
+            
+            # Shuffle chunks internally
+            np.random.shuffle(all_tokens)
+            
+            for i in range(0, total_chunks, batch_size):
+                if i + batch_size <= total_chunks:
+                    yield all_tokens[i:i+batch_size]
 
 def main():
     num_devices = jax.device_count()
@@ -123,8 +150,14 @@ def main():
     state = replicate(state)
     memory_state = replicate(memory_state)
     
-    dataset_path = 'data/pretrain/train_chunks.npy'
-    dataloader = data_generator(dataset_path, total_batch_size, seq_len)
+    dataset_path = '/kaggle/input/vqfat-indonesian-corpus/vqfat_cosmopedia_id.csv'
+    tokenizer_path = 'tokenizer/tokenizer.json'
+    
+    # We still use local paths as fallback for testing
+    if not os.path.exists(dataset_path) and os.path.exists('data/raw/vqfat_cosmopedia_id.csv'):
+        dataset_path = 'data/raw/vqfat_cosmopedia_id.csv'
+        
+    dataloader = data_generator(dataset_path, tokenizer_path, total_batch_size, seq_len)
     
     num_steps = 20
     reset_interval = 4
