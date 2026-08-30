@@ -68,7 +68,7 @@ def train_step(state, memory_state, batch_inputs):
     labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
-        (logits, _, _, aux_loss), mutated = state.apply_fn(
+        (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
             {'params': params, 'memory': memory_state},
             batch_inputs,
             mutable=['memory'],
@@ -78,9 +78,9 @@ def train_step(state, memory_state, batch_inputs):
         ce_loss      = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
         mean_ce      = jnp.mean(ce_loss)
         total_loss   = mean_ce + 0.1 * aux_loss
-        return total_loss, (mean_ce, aux_loss, mutated.get('memory', {}))
+        return total_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
 
-    (total_loss, (ce_loss, aux_loss, new_mem)), grads = jax.value_and_grad(
+    (total_loss, (ce_loss, aux_loss, avg_f_i, new_mem)), grads = jax.value_and_grad(
         loss_fn, has_aux=True
     )(state.params)
 
@@ -88,9 +88,10 @@ def train_step(state, memory_state, batch_inputs):
     total_loss = jax.lax.pmean(total_loss, axis_name='batch')
     ce_loss    = jax.lax.pmean(ce_loss,    axis_name='batch')
     aux_loss   = jax.lax.pmean(aux_loss,   axis_name='batch')
+    avg_f_i    = jax.lax.pmean(avg_f_i,    axis_name='batch')
 
     state = state.apply_gradients(grads=grads)
-    return state, new_mem, {'loss': total_loss, 'ce_loss': ce_loss, 'aux_loss': aux_loss}
+    return state, new_mem, {'loss': total_loss, 'ce_loss': ce_loss, 'aux_loss': aux_loss, 'expert_load': avg_f_i}
 
 # ── Data Loading ─────────────────────────────────────────────────────────────
 def resolve_data_paths():
@@ -210,11 +211,17 @@ def main():
         total_tokens += total_batch_size * SEQ_LEN
 
         if step % LOG_INTERVAL == 0:
-            now            = time.time()
-            tok_per_sec    = (total_batch_size * SEQ_LEN * LOG_INTERVAL) / (now - last_log_time)
-            elapsed        = int(now - start_time)
-            ce_val         = float(unreplicate(metrics['ce_loss']))
-            aux_val        = float(unreplicate(metrics['aux_loss']))
+            now           = time.time()
+            tok_per_sec   = (total_batch_size * SEQ_LEN * LOG_INTERVAL) / (now - last_log_time)
+            elapsed       = int(now - start_time)
+            ce_val        = float(unreplicate(metrics['ce_loss']))
+            aux_val       = float(unreplicate(metrics['aux_loss']))
+            expert_load   = np.array(unreplicate(metrics['expert_load']))
+
+            # Format expert load: E0:12% E1:8% ...
+            expert_str = ' '.join(
+                f'E{i}:{v*100:.0f}%' for i, v in enumerate(expert_load)
+            )
             print(
                 f"Step {step:06d} | "
                 f"CE {ce_val:.4f} | "
@@ -222,6 +229,7 @@ def main():
                 f"Speed {tok_per_sec:>8,.0f} tok/s | "
                 f"Elapsed {elapsed//60}m {elapsed%60:02d}s"
             )
+            print(f"          Expert load: [{expert_str}]")
             last_log_time = now
 
 

@@ -54,7 +54,7 @@ class MoERouter(nn.Module):
         if top_k > 1:
             topk_weights = topk_weights / jnp.sum(topk_weights, axis=-1, keepdims=True)
             
-        return topk_weights, topk_indices, aux_loss
+        return topk_weights, topk_indices, aux_loss, f_i  # f_i: (num_experts,) fraction per expert
 
 class MoELayer(nn.Module):
     config: any
@@ -67,7 +67,7 @@ class MoELayer(nn.Module):
         x = hidden_states.reshape(-1, hidden_size)
         
         router = MoERouter(config=self.config)
-        routing_weights, selected_experts, aux_loss = router(x) # (batch*seq_len, top_k)
+        routing_weights, selected_experts, aux_loss, f_i = router(x)  # (batch*seq_len, top_k)
         
         # Output buffer
         final_hidden_states = jnp.zeros_like(x)
@@ -85,4 +85,4 @@ class MoELayer(nn.Module):
                 
                 final_hidden_states += jnp.where(mask_k, expert_out * weight_k, 0.0)
                 
-        return final_hidden_states.reshape(batch_size, seq_len, hidden_size), aux_loss
+        return final_hidden_states.reshape(batch_size, seq_len, hidden_size), aux_loss, f_i
