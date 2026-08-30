@@ -74,12 +74,13 @@ class CausalSelfAttention(nn.Module):
 class Expert(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.w1 = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.w2 = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        self.w3 = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
 
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        x = self.gate_up_proj(x)
+        x1, x2 = x.chunk(2, dim=-1)
+        return self.down_proj(F.silu(x1) * x2)
 
 class MoELayer(nn.Module):
     def __init__(self, config):
@@ -106,8 +107,8 @@ class MoELayer(nn.Module):
 class MemoryController(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.read_gate = nn.Linear(config.hidden_size, 1, bias=False)
-        self.write_gate = nn.Linear(config.hidden_size, 1, bias=False)
+        self.read_gate = nn.Linear(config.hidden_size, 1, bias=True)
+        self.write_gate = nn.Linear(config.hidden_size, 1, bias=True)
         
     def forward(self, x):
         return torch.sigmoid(self.read_gate(x)), torch.sigmoid(self.write_gate(x))
@@ -139,8 +140,8 @@ class MAMoEForCausalLM(nn.Module):
         bsz, seq_len = input_ids.shape
         x = self.embed_tokens(input_ids)
         cos, sin = self.rope(seq_len)
-        cos = cos.view(1, seq_len, 1, -1)
-        sin = sin.view(1, seq_len, 1, -1)
+        cos = cos.view(1, 1, seq_len, -1)
+        sin = sin.view(1, 1, seq_len, -1)
         
         for layer in self.layers:
             x = layer(x, cos, sin)

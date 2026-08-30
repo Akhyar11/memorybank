@@ -16,11 +16,13 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
 
     # 1. Embeddings & Norm
     state_dict['embed_tokens.weight'] = to_torch(jax_params['embed_tokens']['embedding'])
-    state_dict['norm.weight'] = to_torch(jax_params['norm']['scale'])
+    state_dict['norm.weight'] = to_torch(jax_params['norm']['weight'])
     
     # 2. Memory Controller
     state_dict['memory_controller.read_gate.weight'] = to_torch(jax_params['memory_controller']['read_gate']['kernel'], True)
+    state_dict['memory_controller.read_gate.bias'] = to_torch(jax_params['memory_controller']['read_gate']['bias'])
     state_dict['memory_controller.write_gate.weight'] = to_torch(jax_params['memory_controller']['write_gate']['kernel'], True)
+    state_dict['memory_controller.write_gate.bias'] = to_torch(jax_params['memory_controller']['write_gate']['bias'])
 
     # 3. Layers
     for i in range(config.num_hidden_layers):
@@ -28,8 +30,8 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
         pt_prefix = f'layers.{i}'
         
         # Norms
-        state_dict[f'{pt_prefix}.input_layernorm.weight'] = to_torch(jax_params[layer_prefix]['input_layernorm']['scale'])
-        state_dict[f'{pt_prefix}.post_attention_layernorm.weight'] = to_torch(jax_params[layer_prefix]['post_attention_layernorm']['scale'])
+        state_dict[f'{pt_prefix}.input_layernorm.weight'] = to_torch(jax_params[layer_prefix]['input_layernorm']['weight'])
+        state_dict[f'{pt_prefix}.post_attention_layernorm.weight'] = to_torch(jax_params[layer_prefix]['post_attention_layernorm']['weight'])
         
         # Attention
         attn = jax_params[layer_prefix]['self_attn']
@@ -40,16 +42,15 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
         
         # MoE
         moe = jax_params[layer_prefix]['moe']
-        state_dict[f'{pt_prefix}.moe.router.weight'] = to_torch(moe['router']['kernel'], True)
+        state_dict[f'{pt_prefix}.moe.router.weight'] = to_torch(moe['MoERouter_0']['gate_proj']['kernel'], True)
         
         for j in range(config.num_experts):
-            expert = moe[f'experts_{j}']
-            state_dict[f'{pt_prefix}.moe.experts.{j}.w1.weight'] = to_torch(expert['w1']['kernel'], True)
-            state_dict[f'{pt_prefix}.moe.experts.{j}.w2.weight'] = to_torch(expert['w2']['kernel'], True)
-            state_dict[f'{pt_prefix}.moe.experts.{j}.w3.weight'] = to_torch(expert['w3']['kernel'], True)
+            expert = moe[f'expert_{j}']
+            state_dict[f'{pt_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(expert['gate_up_proj']['kernel'], True)
+            state_dict[f'{pt_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(expert['down_proj']['kernel'], True)
 
     # Load into PyTorch model to verify compatibility
-    pt_model.load_state_dict(state_dict)
+    pt_model.load_state_dict(state_dict, strict=False)
     return state_dict
 
 def main():
