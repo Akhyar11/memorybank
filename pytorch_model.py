@@ -5,8 +5,9 @@ import math
 
 class MAMoEConfig:
     def __init__(self, **kwargs):
-        self.vocab_size = kwargs.get('vocab_size', 32000)
+        self.vocab_size = kwargs.get('vocab_size', 31923)
         self.hidden_size = kwargs.get('hidden_size', 256)
+        self.embed_dim = kwargs.get('embed_dim', 768)
         self.num_hidden_layers = kwargs.get('num_hidden_layers', 8)
         self.num_attention_heads = kwargs.get('num_attention_heads', 4)
         self.head_dim = kwargs.get('head_dim', 64)
@@ -130,7 +131,9 @@ class MAMoEForCausalLM(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.embed_dim)
+        self.embed_proj = nn.Linear(config.embed_dim, config.hidden_size)
+        self.lm_head_proj = nn.Linear(config.hidden_size, config.embed_dim)
         self.layers = nn.ModuleList([MAMoEBlock(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.rope = RoPE(config.head_dim, config.rope_theta)
@@ -139,6 +142,7 @@ class MAMoEForCausalLM(nn.Module):
     def forward(self, input_ids):
         bsz, seq_len = input_ids.shape
         x = self.embed_tokens(input_ids)
+        x = self.embed_proj(x)
         cos, sin = self.rope(seq_len)
         cos = cos.view(1, 1, seq_len, -1)
         sin = sin.view(1, 1, seq_len, -1)
@@ -147,5 +151,6 @@ class MAMoEForCausalLM(nn.Module):
             x = layer(x, cos, sin)
             
         x = self.norm(x)
-        logits = torch.matmul(x, self.embed_tokens.weight.T)
+        x_proj = self.lm_head_proj(x)
+        logits = torch.matmul(x_proj, self.embed_tokens.weight.T)
         return logits

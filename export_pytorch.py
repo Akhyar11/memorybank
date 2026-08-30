@@ -16,6 +16,10 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
 
     # 1. Embeddings & Norm
     state_dict['embed_tokens.weight'] = to_torch(jax_params['embed_tokens']['embedding'])
+    state_dict['embed_proj.weight'] = to_torch(jax_params['embed_proj']['kernel'], True)
+    state_dict['embed_proj.bias'] = to_torch(jax_params['embed_proj']['bias'])
+    state_dict['lm_head_proj.weight'] = to_torch(jax_params['lm_head_proj']['kernel'], True)
+    state_dict['lm_head_proj.bias'] = to_torch(jax_params['lm_head_proj']['bias'])
     state_dict['norm.weight'] = to_torch(jax_params['norm']['weight'])
     
     # 2. Memory Controller
