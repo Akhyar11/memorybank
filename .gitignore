@@ -36,3 +36,6 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+pretrained_embeds.npy
+pytorch_model.pt
+tokenizer_hf/

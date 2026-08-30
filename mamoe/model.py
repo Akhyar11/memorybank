@@ -41,9 +41,12 @@ class MAMoEForCausalLM(nn.Module):
     def setup(self):
         self.embed_tokens = nn.Embed(
             num_embeddings=self.config.vocab_size, 
-            features=self.config.hidden_size,
+            features=self.config.embed_dim,
             embedding_init=nn.initializers.normal(stddev=0.02)
         )
+        self.embed_proj = nn.Dense(self.config.hidden_size, name='embed_proj')
+        self.lm_head_proj = nn.Dense(self.config.embed_dim, name='lm_head_proj')
+        
         self.rope = RoPE(dim=self.config.head_dim, max_position_embeddings=self.config.max_position_embeddings)
         self.norm = RMSNorm(dim=self.config.hidden_size, eps=self.config.rms_norm_eps, name='norm')
         
@@ -67,7 +70,10 @@ class MAMoEForCausalLM(nn.Module):
                 If provided, memory WRITE logic may be triggered.
         """
         batch_size, seq_len = input_ids.shape
-        hidden_states = self.embed_tokens(input_ids)
+        # Extract embeddings (Batch, Seq, Embed_Dim)
+        raw_embeds = self.embed_tokens(input_ids)
+        # Project down to hidden size
+        hidden_states = self.embed_proj(raw_embeds)
         
         # Create positions
         positions = jnp.broadcast_to(jnp.arange(seq_len)[None, :], (batch_size, seq_len))
@@ -104,9 +110,12 @@ class MAMoEForCausalLM(nn.Module):
         # Replace the last token state with the fused state
         hidden_states = hidden_states.at[:, -1, :].set(fused_h_eos)
         
-        # -- LM Head (Tied Weights) --
-        # In tied weights, we use the embedding matrix transposed
-        logits = jnp.matmul(hidden_states, self.embed_tokens.embedding.T)
+        # -- LM Head (Tied Weights with Projection) --
+        # Project hidden_states (256) back up to embed_dim (768)
+        projected_states = self.lm_head_proj(hidden_states)
+        
+        # Multiply with the tied embedding matrix
+        logits = jnp.matmul(projected_states, self.embed_tokens.embedding.T)
         
         # Return probabilities for logging, aux_loss for balancing, dan avg_f_i untuk expert monitoring
         return logits, read_prob, write_prob, total_aux_loss, avg_f_i

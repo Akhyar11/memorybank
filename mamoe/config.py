@@ -2,8 +2,10 @@ from dataclasses import dataclass
 
 @dataclass
 class MAMoEConfig:
-    vocab_size: int = 32000
+    vocab_size: int = 31923         # IndoBERT vocab size
     hidden_size: int = 256          # d = 256
+    embed_dim: int = 768            # IndoBERT embed dim
+    freeze_embeddings: bool = True  # Freeze embeddings during training
     num_hidden_layers: int = 8      # L = 8
     num_attention_heads: int = 4    # Heads = 4 (64 dim)
     head_dim: int = 64

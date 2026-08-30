@@ -40,9 +40,22 @@ class MAMoETrainState(train_state.TrainState):
 
 # ── Model Init ───────────────────────────────────────────────────────────────
 def create_train_state(rng, model, dummy_input):
-    variables      = model.init(rng, dummy_input)
+    import os
+    import numpy as np
+    import flax
+    import flax.traverse_util
+    
+    dummy_eos = jnp.zeros((1,), dtype=jnp.int32)
+    variables      = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
     params         = variables['params']
     memory_state   = variables.get('memory', {})
+
+    if os.path.exists("pretrained_embeds.npy") and getattr(model.config, 'freeze_embeddings', False):
+        print("Injecting pretrained embeddings...")
+        embeds = np.load("pretrained_embeds.npy")
+        params = params.unfreeze()
+        params['embed_tokens']['embedding'] = jnp.array(embeds)
+        params = flax.core.freeze(params)
 
     # Cosine decay LR + warmup via optax chain
     lr_schedule = optax.warmup_cosine_decay_schedule(
@@ -52,9 +65,24 @@ def create_train_state(rng, model, dummy_input):
         decay_steps=50_000,
         end_value=3e-5,
     )
+    
+    if getattr(model.config, 'freeze_embeddings', False):
+        partition_optimizers = {
+            'frozen': optax.set_to_zero(),
+            'trainable': optax.adamw(lr_schedule, weight_decay=0.1)
+        }
+        def map_params(path, _):
+            if 'embed_tokens' in path: return 'frozen'
+            return 'trainable'
+        flat_params = flax.traverse_util.flatten_dict(params, sep='/')
+        param_labels = flax.traverse_util.unflatten_dict({k: map_params(k, v) for k, v in flat_params.items()})
+        base_tx = optax.multi_transform(partition_optimizers, param_labels)
+    else:
+        base_tx = optax.adamw(lr_schedule, weight_decay=0.1)
+        
     tx = optax.chain(
         optax.clip_by_global_norm(1.0),   # gradient clipping
-        optax.adamw(lr_schedule, weight_decay=0.1),
+        base_tx,
     )
     # Wrap dengan MultiSteps untuk gradient accumulation
     tx = optax.MultiSteps(tx, every_k_schedule=GRAD_ACCUM_STEPS)
