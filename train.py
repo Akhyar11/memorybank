@@ -30,6 +30,7 @@ LOCAL_TOK       = 'tokenizer/tokenizer.json'
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 SEQ_LEN           = 1024
 LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
+GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL      = 10
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +56,8 @@ def create_train_state(rng, model, dummy_input):
         optax.clip_by_global_norm(1.0),   # gradient clipping
         optax.adamw(lr_schedule, weight_decay=0.1),
     )
+    # Wrap dengan MultiSteps untuk gradient accumulation
+    tx = optax.MultiSteps(tx, every_k_schedule=GRAD_ACCUM_STEPS)
 
     state = MAMoETrainState.create(apply_fn=model.apply, params=params, tx=tx)
     return state, memory_state
@@ -164,9 +167,11 @@ def prefetch(generator, maxsize=PREFETCH_QUEUE):
 def main():
     num_devices      = jax.device_count()
     total_batch_size = LOCAL_BATCH_SIZE * num_devices
-    print(f"Devices   : {num_devices}")
-    print(f"Batch size: {total_batch_size} total ({LOCAL_BATCH_SIZE} per device)")
-    print(f"Seq len   : {SEQ_LEN}")
+    print(f"Devices        : {num_devices}")
+    print(f"Micro-batch    : {total_batch_size} total ({LOCAL_BATCH_SIZE} per device)")
+    print(f"Grad accum     : {GRAD_ACCUM_STEPS} steps")
+    print(f"Effective batch: {total_batch_size * GRAD_ACCUM_STEPS} (Safe for 16GB VRAM)")
+    print(f"Seq len        : {SEQ_LEN}")
     print()
 
     config = MAMoEConfig()
