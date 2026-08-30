@@ -166,7 +166,6 @@ def main():
     print(f"Devices   : {num_devices}")
     print(f"Batch size: {total_batch_size} total ({LOCAL_BATCH_SIZE} per device)")
     print(f"Seq len   : {SEQ_LEN}")
-    print(f"Grad accum: {GRAD_ACCUM_STEPS}  →  Effective batch: {total_batch_size * GRAD_ACCUM_STEPS}")
     print()
 
     config = MAMoEConfig()
