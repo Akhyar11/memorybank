@@ -98,8 +98,8 @@ class MAMoEForCausalLM(nn.Module):
         
         # If the utterance just ended and write gate is active, we write to memory
         if is_eos is not None:
-            # We conditionally write based on WRITE prob
-            pass # In a real training loop, we use jax.lax.cond or a masked write
+            # Masked write based on EOS flag and write probability threshold
+            self.memory_bank.write(h_eos, is_eos, write_prob)
             
         # Replace the last token state with the fused state
         hidden_states = hidden_states.at[:, -1, :].set(fused_h_eos)

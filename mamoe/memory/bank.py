@@ -173,7 +173,7 @@ class MemoryBank(nn.Module):
         
         return read_result
 
-    def write(self, h_eos: jax.Array):
+    def write(self, h_eos: jax.Array, is_eos: jax.Array, write_prob: jax.Array):
         step = self.global_step.value
         k_new = self.k_proj(h_eos)
         v_new = self.v_proj(h_eos)
@@ -200,7 +200,10 @@ class MemoryBank(nn.Module):
         
         def update_single_write(state_tuple, inputs):
             (keys, vals, state, imp, conf, created, last_acc, acc_cnt) = state_tuple
-            k_n, v_n, i_n, c_n = inputs
+            k_n, v_n, i_n, c_n, is_e, w_p = inputs
+            
+            # Ensure we only write if the sequence ended and the probability exceeds threshold
+            do_write = jnp.logical_and(is_e > 0, w_p >= self.config.memory_threshold)
             
             # Find nearest memory
             sim = jnp.dot(k_norm, k_n)
@@ -233,26 +236,32 @@ class MemoryBank(nn.Module):
             
             target_idx = jnp.where(is_update, nearest_idx, insert_idx)
             
-            # Apply changes
-            keys = keys.at[target_idx].set(k_n)
-            vals = vals.at[target_idx].set(jnp.where(is_update, updated_v, v_n))
-            imp = imp.at[target_idx].set(jnp.where(is_update, jnp.maximum(imp[nearest_idx], i_n), i_n))
-            conf = conf.at[target_idx].set(jnp.where(is_update, updated_c, c_n))
-            state = state.at[target_idx].set(STATE_ACTIVE)
-            last_acc = last_acc.at[target_idx].set(step)
+            # Apply changes ONLY if do_write is True
+            keys = jnp.where(do_write, keys.at[target_idx].set(k_n), keys)
+            vals = jnp.where(do_write, vals.at[target_idx].set(jnp.where(is_update, updated_v, v_n)), vals)
+            imp = jnp.where(do_write, imp.at[target_idx].set(jnp.where(is_update, jnp.maximum(imp[nearest_idx], i_n), i_n)), imp)
+            conf = jnp.where(do_write, conf.at[target_idx].set(jnp.where(is_update, updated_c, c_n)), conf)
+            state = jnp.where(do_write, state.at[target_idx].set(STATE_ACTIVE), state)
+            last_acc = jnp.where(do_write, last_acc.at[target_idx].set(step), last_acc)
             
             # Only reset created_at and access_count on INSERT
-            created = created.at[target_idx].set(jnp.where(is_update, created[target_idx], step))
-            acc_cnt = acc_cnt.at[target_idx].set(jnp.where(is_update, acc_cnt[target_idx] + 1, 1))
+            created = jnp.where(do_write, created.at[target_idx].set(jnp.where(is_update, created[target_idx], step)), created)
+            acc_cnt = jnp.where(do_write, acc_cnt.at[target_idx].set(jnp.where(is_update, acc_cnt[target_idx] + 1, 1)), acc_cnt)
             
             return (keys, vals, state, imp, conf, created, last_acc, acc_cnt), None
 
         init_state = (keys, vals, state, imp, conf, created, last_acc, acc_cnt)
-        new_state, _ = jax.lax.scan(update_single_write, init_state, (k_new_norm, v_new, i_new, c_new))
-        
-        self.mem_keys.value, self.mem_vals.value, self.mem_state.value, \
-        self.mem_importance.value, self.mem_confidence.value, \
-        self.mem_created_at.value, self.mem_last_access.value, self.mem_access_count.value = new_state
+        (new_keys, new_vals, new_state, new_imp, new_conf, new_created, new_last_acc, new_acc_cnt), _ = jax.lax.scan(
+            update_single_write, init_state, (k_new_norm, v_new, i_new, c_new, is_eos, write_prob)
+        )
+        self.mem_keys.value = new_keys
+        self.mem_vals.value = new_vals
+        self.mem_state.value = new_state
+        self.mem_importance.value = new_imp
+        self.mem_confidence.value = new_conf
+        self.mem_created_at.value = new_created
+        self.mem_last_access.value = new_last_acc
+        self.mem_access_count.value = new_acc_cnt
 
     def fuse(self, h: jax.Array, m: jax.Array) -> jax.Array:
         # Fusion using concatenation: h_mem = W_f[h; m]
