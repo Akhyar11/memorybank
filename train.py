@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import optax
 import numpy as np
 import functools
+import orbax.checkpoint as ocp
 
 # ── Optimasi Tensor Core (T4/P100 bfloat16) ─────────────────────────────────
 jax.config.update('jax_default_matmul_precision', 'bfloat16')
@@ -235,6 +236,18 @@ def main():
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")
+
+    # --- SAVE CHECKPOINT ---
+    print("\n💾 Saving Phase 1 checkpoint...")
+    ckpt_dir = '/kaggle/working/checkpoints/phase1' if os.path.exists('/kaggle') else 'checkpoints/phase1'
+    os.makedirs(ckpt_dir, exist_ok=True)
+    
+    # We must unreplicate the state before saving so it's a single copy, not sharded across GPUs
+    unreplicated_state = unreplicate(state)
+    
+    checkpointer = ocp.StandardCheckpointer()
+    checkpointer.save(os.path.abspath(ckpt_dir), unreplicated_state, force=True)
+    print(f"✅ Checkpoint saved to: {ckpt_dir}")
 
 if __name__ == '__main__':
     main()

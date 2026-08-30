@@ -30,7 +30,7 @@ def setup_environment():
     # Step 3: Install remaining pipeline dependencies (force upgrade to match JAX 0.11.x)
     subprocess.run([
         sys.executable, "-m", "pip", "install", "-q", "-U",
-        "flax", "optax", "tokenizers", "pandas", "pyarrow", "fastparquet"
+        "flax", "optax", "orbax-checkpoint", "tokenizers", "pandas", "pyarrow", "fastparquet"
     ], check=True)
     print("✅ All dependencies ready.\n")
 

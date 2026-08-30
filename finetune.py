@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import optax
 import numpy as np
 import functools
+import orbax.checkpoint as ocp
 
 # ── Optimasi Tensor Core (T4/P100 bfloat16) ─────────────────────────────────
 jax.config.update('jax_default_matmul_precision', 'bfloat16')
@@ -150,8 +151,21 @@ def main():
     dummy  = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
     print("Initializing model for Phase 2: Fine-Tuning...")
     state, memory_state = create_train_state(rng, model, dummy)
-    # TODO: load checkpoint Phase 1 di sini
+    
+    # --- LOAD PHASE 1 CHECKPOINT ---
+    ckpt_dir = '/kaggle/working/checkpoints/phase1' if os.path.exists('/kaggle') else 'checkpoints/phase1'
+    if os.path.exists(ckpt_dir):
+        print(f"Loading Phase 1 weights from {ckpt_dir}...")
+        checkpointer = ocp.StandardCheckpointer()
+        # Restore state
+        state = checkpointer.restore(os.path.abspath(ckpt_dir), item=state)
+        print("✅ Phase 1 Pre-trained Weights Loaded!")
+    else:
+        print("⚠️ Warning: Phase 1 checkpoint not found, starting from scratch!")
 
+    # Pre-compute empty memory template ONCE
+    empty_memory_template = jax.tree_util.tree_map(jnp.zeros_like, memory_state)
+    
     state        = replicate(state)
     memory_state = replicate(memory_state)
     print("Done.\n")
@@ -202,6 +216,16 @@ def main():
           f"Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  "
           f"Conversations: {conv_resets}  |  "
           f"Tokens: {total_tokens:,}")
+
+    # --- SAVE CHECKPOINT ---
+    print("\n💾 Saving Phase 2 (Fine-tuned) checkpoint...")
+    ckpt_dir = '/kaggle/working/checkpoints/phase2' if os.path.exists('/kaggle') else 'checkpoints/phase2'
+    os.makedirs(ckpt_dir, exist_ok=True)
+    
+    unreplicated_state = unreplicate(state)
+    checkpointer = ocp.StandardCheckpointer()
+    checkpointer.save(os.path.abspath(ckpt_dir), unreplicated_state, force=True)
+    print(f"✅ Checkpoint saved to: {ckpt_dir}")
 
 if __name__ == '__main__':
     main()
