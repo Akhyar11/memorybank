@@ -249,7 +249,7 @@ def run_evaluation(model, variables, tokenizer,
                    episodes: List[Dict],
                    max_episodes: Optional[int] = None,
                    label: str = "eval",
-                   batch_size: int = 32) -> List[EvalResult]:
+                   batch_size: int = 8) -> List[EvalResult]:
     results = []
     n = min(len(episodes), max_episodes) if max_episodes else len(episodes)
     episodes = episodes[:n]
