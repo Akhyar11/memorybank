@@ -18,9 +18,9 @@ from mamoe.model import MAMoEForCausalLM
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_PARQUET  = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
-KAGGLE_TOK      = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
+KAGGLE_TOK      = '/kaggle/input/datasets/akhyarsafrudin/tokenizer_hf/tokenizer.json'
 LOCAL_PARQUET   = 'data/raw/t5gemma2_chat_multiturn.parquet'
-LOCAL_TOK       = 'tokenizer/tokenizer.json'
+LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────

@@ -8,8 +8,8 @@ import orbax.checkpoint as ocp
 from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForCausalLM
 
-LOCAL_TOK = 'tokenizer/tokenizer.json'
-KAGGLE_TOK = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
+LOCAL_TOK = 'tokenizer_hf/tokenizer.json'
+KAGGLE_TOK = '/kaggle/input/datasets/akhyarsafrudin/tokenizer_hf/tokenizer.json'
 
 def load_model_and_tokenizer():
     devices = jax.devices()

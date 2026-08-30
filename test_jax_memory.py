@@ -39,7 +39,7 @@ def main():
     
     print("🔤 Loading Tokenizer...")
     try:
-        tokenizer = Tokenizer.from_file("tokenizer/tokenizer.json")
+        tokenizer = Tokenizer.from_file("tokenizer_hf/tokenizer.json")
     except Exception as e:
         print(f"❌ Failed to load tokenizer: {e}")
         return

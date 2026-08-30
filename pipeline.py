@@ -42,7 +42,9 @@ def check_kaggle_environment():
     
     vqfat_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
     t5gemma_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
-    tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
+    
+    # We now use the local HF tokenizer downloaded by fetch_embeddings.py
+    tokenizer_path = 'tokenizer_hf/tokenizer.json'
     
     if not os.path.exists(vqfat_path):
         print(f"⚠️  WARNING: Pre-training dataset not found at {vqfat_path}")
@@ -55,7 +57,7 @@ def check_kaggle_environment():
         print("✅ Phase 2 Dataset Found (T5Gemma2 Parquet)")
         
     if not os.path.exists(tokenizer_path):
-        print(f"⚠️  WARNING: Tokenizer not found at {tokenizer_path}")
+        print(f"⚠️  WARNING: Tokenizer not found at {tokenizer_path}. Please run 'python fetch_embeddings.py' first!")
     else:
         print("✅ Tokenizer Found")
     print("="*50 + "\n")

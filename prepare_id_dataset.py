@@ -90,9 +90,9 @@ def main():
                 break
     print(f"Using column '{text_column}' for text data.")
     
-    tokenizer_path = "tokenizer/tokenizer.json"
+    tokenizer_path = "tokenizer_hf/tokenizer.json"
     if not os.path.exists(tokenizer_path):
-        print(f"Tokenizer not found at {tokenizer_path}. Please run build_tokenizer.py first.")
+        print(f"Tokenizer not found at {tokenizer_path}. Please run fetch_embeddings.py first.")
         return
     else:
         print(f"Loading existing tokenizer from {tokenizer_path}")

@@ -26,7 +26,7 @@ def main():
     model = MAMoEForCausalLM(config)
     state_dict = torch.load("pytorch_model.pt", weights_only=True)
     model.load_state_dict(state_dict, strict=False)
-    tokenizer = Tokenizer.from_file("tokenizer/tokenizer.json")
+    tokenizer = Tokenizer.from_file("tokenizer_hf/tokenizer.json")
     
     prompts = ["User: Ibukota Indonesia adalah?\nAssistant:"]
     for prompt in prompts:

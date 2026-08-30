@@ -15,9 +15,9 @@ from tokenizers import Tokenizer
 
 # ─── Konfigurasi Path ────────────────────────────────────────────────────────
 KAGGLE_CSV     = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
-KAGGLE_TOK     = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
+KAGGLE_TOK     = 'tokenizer_hf/tokenizer.json'
 LOCAL_CSV      = 'data/raw/vqfat_cosmopedia_id.csv'
-LOCAL_TOK      = 'tokenizer/tokenizer.json'
+LOCAL_TOK      = 'tokenizer_hf/tokenizer.json'
 OUTPUT_PATH    = '/kaggle/working/vqfat_tokens.npy'
 OUTPUT_PATH_LO = 'data/pretrain/vqfat_tokens.npy'  # fallback lokal
 # ─────────────────────────────────────────────────────────────────────────────

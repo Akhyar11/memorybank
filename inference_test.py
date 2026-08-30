@@ -10,7 +10,7 @@ from mamoe.model import MAMoEForCausalLM
 
 def main():
     print("1. Memuat Tokenizer...")
-    tokenizer = Tokenizer.from_file('tokenizer/tokenizer.json')
+    tokenizer = Tokenizer.from_file('tokenizer_hf/tokenizer.json')
     
     print("2. Inisialisasi Model MAMoE-50 (Bobot Random Lokal)...")
     config = MAMoEConfig()

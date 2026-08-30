@@ -33,8 +33,8 @@ from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForCausalLM
 
 # ─── Path Konfigurasi ───────────────────────────────────────────────────────
-KAGGLE_TOK   = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
-LOCAL_TOK    = 'tokenizer/tokenizer.json'
+KAGGLE_TOK   = '/kaggle/input/datasets/akhyarsafrudin/tokenizer_hf/tokenizer.json'
+LOCAL_TOK    = 'tokenizer_hf/tokenizer.json'
 
 # Dataset evaluasi (gunakan memorybench_train.jsonl sebagai held-out eval)
 EVAL_JSONL   = 'data/memorybench_train.jsonl'
