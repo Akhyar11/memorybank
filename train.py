@@ -29,9 +29,7 @@ LOCAL_TOK       = 'tokenizer/tokenizer.json'
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 SEQ_LEN           = 1024
 LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
-RESET_INTERVAL    = 4       # memory reset setiap N step
 LOG_INTERVAL      = 10
-GRAD_ACCUM_STEPS  = 2       # gradient accumulation (effective batch × 2)
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -184,6 +182,9 @@ def main():
     state        = replicate(state)
     memory_state = replicate(memory_state)
     print("Done.\n")
+    # Catatan: Memory TIDAK di-reset selama pre-training.
+    # Memory dibiarkan mengakumulasi konteks dari teks secara natural.
+    # Reset hanya berlaku di finetune.py (conversation boundary).
 
     # Pilih sumber data
     mode, data_path, tok_path = resolve_data_paths()
@@ -223,9 +224,7 @@ def main():
             )
             last_log_time = now
 
-        if step % RESET_INTERVAL == 0:
-            # Nol-kan memory_state yang sedang berjalan (sharding identik, tidak re-trace)
-            memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
+
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")
