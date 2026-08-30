@@ -60,6 +60,21 @@ def check_kaggle_environment():
         print("✅ Tokenizer Found")
     print("="*50 + "\n")
 
+def run_pretokenize():
+    """Pre-tokenize CSV → npy once (skip if already done)."""
+    npy_path = '/kaggle/working/vqfat_tokens.npy'
+    if os.path.exists(npy_path):
+        import numpy as np
+        arr = np.load(npy_path, mmap_mode='r')
+        print(f"⚡ Pre-tokenized file exists ({arr.shape[0]:,} tokens). Skipping tokenization.\n")
+        return
+    print("🔤 PRE-TOKENIZING dataset (runs once, makes training much faster)...")
+    result = subprocess.run([sys.executable, "pretokenize.py"], check=False)
+    if result.returncode != 0:
+        print("⚠️  Pre-tokenization failed. Training will fall back to CSV streaming.")
+    else:
+        print("✅ PRE-TOKENIZATION DONE!\n")
+
 def run_phase_1():
     print("🚀 STARTING PHASE 1: PRE-TRAINING (Next Token Predictor)")
     print("Running train.py...")
@@ -83,6 +98,7 @@ def run_phase_2():
 if __name__ == "__main__":
     setup_environment()
     check_kaggle_environment()
+    run_pretokenize()
     run_phase_1()
     run_phase_2()
     print("🎉 FULL PIPELINE EXECUTION SUCCESSFUL!")
