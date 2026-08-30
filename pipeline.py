@@ -8,20 +8,24 @@ def check_kaggle_environment():
     print("MAMoE-50 Kaggle Training Pipeline")
     print("="*50)
     
-    vqfat_path = '/kaggle/input/vqfat-indonesian-corpus/vqfat_cosmopedia_id.csv'
-    t5gemma_path = '/kaggle/input/t5gemma2-indonesia-chat/t5gemma2_chat_multiturn.parquet'
+    vqfat_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
+    t5gemma_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
+    tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
     
     if not os.path.exists(vqfat_path):
         print(f"⚠️  WARNING: Pre-training dataset not found at {vqfat_path}")
-        print("Ensure you have added the 'vqfat-indonesian-corpus' dataset to your Kaggle Notebook.")
     else:
         print("✅ Phase 1 Dataset Found (VQFat CSV)")
         
     if not os.path.exists(t5gemma_path):
         print(f"⚠️  WARNING: Fine-Tuning dataset not found at {t5gemma_path}")
-        print("Ensure you have added the 't5gemma2-indonesia-chat' dataset to your Kaggle Notebook.")
     else:
         print("✅ Phase 2 Dataset Found (T5Gemma2 Parquet)")
+        
+    if not os.path.exists(tokenizer_path):
+        print(f"⚠️  WARNING: Tokenizer not found at {tokenizer_path}")
+    else:
+        print("✅ Tokenizer Found")
     print("="*50 + "\n")
 
 def run_phase_1():

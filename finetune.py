@@ -160,12 +160,13 @@ def main():
     state = replicate(state)
     memory_state = replicate(memory_state)
     
-    dataset_path = '/kaggle/input/t5gemma2-indonesia-chat/t5gemma2_chat_multiturn.parquet'
-    tokenizer_path = 'tokenizer/tokenizer.json'
+    dataset_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
+    tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
     
     # We still use local paths as fallback for testing
     if not os.path.exists(dataset_path) and os.path.exists('data/raw/t5gemma2_chat_multiturn.parquet'):
         dataset_path = 'data/raw/t5gemma2_chat_multiturn.parquet'
+        tokenizer_path = 'tokenizer/tokenizer.json'
         
     dataloader = chat_data_generator(dataset_path, tokenizer_path, total_batch_size, seq_len)
     

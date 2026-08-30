@@ -150,12 +150,13 @@ def main():
     state = replicate(state)
     memory_state = replicate(memory_state)
     
-    dataset_path = '/kaggle/input/vqfat-indonesian-corpus/vqfat_cosmopedia_id.csv'
-    tokenizer_path = 'tokenizer/tokenizer.json'
+    dataset_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
+    tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
     
     # We still use local paths as fallback for testing
     if not os.path.exists(dataset_path) and os.path.exists('data/raw/vqfat_cosmopedia_id.csv'):
         dataset_path = 'data/raw/vqfat_cosmopedia_id.csv'
+        tokenizer_path = 'tokenizer/tokenizer.json'
         
     dataloader = data_generator(dataset_path, tokenizer_path, total_batch_size, seq_len)
     
