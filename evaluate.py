@@ -97,27 +97,41 @@ def load_model_and_tokenizer():
 #  2. Inference
 # ══════════════════════════════════════════════════════════════════════════════
 
-def greedy_generate(model, variables, tokenizer, prompt: str,
-                    max_new_tokens: int = MAX_NEW_TOKENS) -> str:
-    """Auto-regressive greedy decoding dengan Memory Bank (Padded + JIT for GPU)."""
-    enc    = tokenizer.encode(prompt)
-    ids    = enc.ids[-256:]          # truncate agar tidak OOM
+def greedy_generate_batch(model, variables, tokenizer, prompts: List[str],
+                          max_new_tokens: int = MAX_NEW_TOKENS) -> List[str]:
+    """Auto-regressive greedy decoding dengan Memory Bank (Batched + JIT)."""
+    batch_size = len(prompts)
+    encs = tokenizer.encode_batch(prompts)
     
-    # Pad to fixed length 512
-    MAX_LEN = 256 + max_new_tokens
-    padded_ids = ids + [0] * (MAX_LEN - len(ids))
-    tokens = jnp.array([padded_ids], dtype=jnp.int32)
-    seq_len = len(ids)
+    # Pad to fixed length
+    MAX_PROMPT_LEN = 256
+    MAX_LEN = MAX_PROMPT_LEN + max_new_tokens
     
+    padded_ids = np.zeros((batch_size, MAX_LEN), dtype=np.int32)
+    seq_lens = np.zeros(batch_size, dtype=np.int32)
+    
+    for i, enc in enumerate(encs):
+        ids = enc.ids[-MAX_PROMPT_LEN:]
+        seq_lens[i] = len(ids)
+        padded_ids[i, :len(ids)] = ids
+        
+    tokens = jnp.array(padded_ids, dtype=jnp.int32)
+    seq_lens_jnp = jnp.array(seq_lens, dtype=jnp.int32)
+    
+    # Duplicate memory state for the batch
     mem = variables.get('memory', {})
+    if len(jax.tree_util.tree_leaves(mem)) > 0:
+        mem = jax.tree_util.tree_map(lambda x: jnp.repeat(x, batch_size, axis=0) if x.shape[0] == 1 else x[:batch_size], mem)
+    
     params = variables['params']
 
     @jax.jit
-    def generate_step(tokens_in, seq_len_in, mem_in):
-        # Create an additive attention mask for padding: 0 for valid, -1e9 for padding
-        mask = jnp.arange(MAX_LEN) < seq_len_in
+    def generate_step(tokens_in, seq_lens_in, mem_in):
+        # Create additive attention mask
+        idx = jnp.arange(MAX_LEN)[None, :]
+        mask = idx < seq_lens_in[:, None]
         mask = jnp.where(mask, 0.0, -1e9)
-        mask = mask.reshape((1, 1, 1, MAX_LEN))
+        mask = mask.reshape((batch_size, 1, 1, MAX_LEN))
         
         (logits, _, _, _, _), mutated = model.apply(
             {'params': params, 'memory': mem_in},
@@ -125,31 +139,41 @@ def greedy_generate(model, variables, tokenizer, prompt: str,
             attention_mask=mask,
             mutable=['memory'],
         )
-        # Logits has shape (1, MAX_LEN, vocab_size). We want the logit at seq_len_in - 1
-        last_logit = logits[0, seq_len_in - 1]
-        next_tok = jnp.argmax(last_logit).astype(jnp.int32)
         
-        # Update the token array at seq_len_in
-        # tokens_out = tokens_in.at[0, seq_len_in].set(next_tok)
-        # Using dynamic update slice is safer in JAX
-        tokens_out = jax.lax.dynamic_update_slice(tokens_in, jnp.array([[next_tok]]), (0, seq_len_in))
+        batch_idx = jnp.arange(batch_size)
+        last_logits = logits[batch_idx, seq_lens_in - 1]
+        next_toks = jnp.argmax(last_logits, axis=-1).astype(jnp.int32)
         
+        tokens_out = tokens_in.at[batch_idx, seq_lens_in].set(next_toks)
         mem_out = mutated.get('memory', mem_in)
-        return tokens_out, next_tok, mem_out
+        return tokens_out, next_toks, mem_out
 
-    # Now run the generation loop
-    for _ in range(max_new_tokens):
-        tokens, next_tok, mem = generate_step(tokens, seq_len, mem)
-        next_tok = int(next_tok)
-        seq_len += 1
+    # Generation loop
+    active = np.ones(batch_size, dtype=bool)
+    for step in range(max_new_tokens):
+        tokens, next_toks, mem = generate_step(tokens, seq_lens_jnp, mem)
+        next_toks = np.array(next_toks)
+        seq_lens_jnp += 1
         
-        decoded = tokenizer.decode([next_tok])
-        if decoded in ('\n', '</s>', '[EOS]', '<eos>'):
+        for i in range(batch_size):
+            if active[i]:
+                dec = tokenizer.decode([int(next_toks[i])])
+                if dec in ('\n', '</s>', '[EOS]', '<eos>'):
+                    active[i] = False
+                    
+        if not np.any(active):
             break
 
-    # Extract the generated portion
-    generated = tokenizer.decode(tokens[0, len(ids):seq_len].tolist())
-    return generated.strip()
+    generated = []
+    tokens_np = np.array(tokens)
+    seq_lens_np = np.array(seq_lens_jnp)
+    for i in range(batch_size):
+        start_idx = seq_lens[i]
+        end_idx = seq_lens_np[i]
+        gen = tokenizer.decode(tokens_np[i, start_idx:end_idx].tolist())
+        generated.append(gen.strip())
+        
+    return generated
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -221,39 +245,54 @@ def build_prompt(episode: Dict, tokenizer: Tokenizer) -> tuple:
 def run_evaluation(model, variables, tokenizer,
                    episodes: List[Dict],
                    max_episodes: Optional[int] = None,
-                   label: str = "eval") -> List[EvalResult]:
+                   label: str = "eval",
+                   batch_size: int = 32) -> List[EvalResult]:
     results = []
     n = min(len(episodes), max_episodes) if max_episodes else len(episodes)
-    print(f"\n📊 Running {label} on {n} episodes...")
+    episodes = episodes[:n]
+    print(f"\n📊 Running {label} on {n} episodes (Batched, batch_size={batch_size})...")
 
     t0 = time.time()
-    for i, ep in enumerate(episodes[:n]):
-        prompt, ctx_tokens = build_prompt(ep, tokenizer)
-        pred = greedy_generate(model, variables, tokenizer, prompt)
-
-        gold = ep['answer']
-        diff = ep['difficulty']
-        r = EvalResult(
-            task              = ep['task'],
-            episode_id        = ep['episode_id'],
-            query             = ep['query'],
-            gold_answer       = gold,
-            prediction        = pred,
-            em                = exact_match(pred, gold),
-            partial           = partial_match(pred, gold),
-            memory_distance   = diff.get('memory_distance', 0),
-            num_facts         = diff.get('num_facts', 0),
-            num_updates       = diff.get('num_updates', 0),
-            context_tokens    = ctx_tokens,
-            memory_slots_used = diff.get('num_facts', 0),  # approx
-        )
-        results.append(r)
+    
+    for i in range(0, n, batch_size):
+        batch_eps = episodes[i:i+batch_size]
+        actual_bs = len(batch_eps)
+        
+        prompts = []
+        ctx_tokens_list = []
+        for ep in batch_eps:
+            prompt, ctx_tokens = build_prompt(ep, tokenizer)
+            prompts.append(prompt)
+            ctx_tokens_list.append(ctx_tokens)
+            
+        # Jika batch_size di sisa data tidak penuh, kita tetap kirim semuanya ke greedy_generate_batch
+        # (JIT akan re-compile 1 kali lagi untuk ukuran batch sisa ini, tapi tidak masalah)
+        preds = greedy_generate_batch(model, variables, tokenizer, prompts)
+        
+        for j, ep in enumerate(batch_eps):
+            gold = ep['answer']
+            diff = ep['difficulty']
+            pred = preds[j]
+            r = EvalResult(
+                task              = ep['task'],
+                episode_id        = ep['episode_id'],
+                query             = ep['query'],
+                gold_answer       = gold,
+                prediction        = pred,
+                em                = exact_match(pred, gold),
+                partial           = partial_match(pred, gold),
+                memory_distance   = diff.get('memory_distance', 0),
+                num_facts         = diff.get('num_facts', 0),
+                num_updates       = diff.get('num_updates', 0),
+                context_tokens    = ctx_tokens_list[j],
+                memory_slots_used = diff.get('num_facts', 0),
+            )
+            results.append(r)
 
         # Progress
-        if (i + 1) % 20 == 0 or (i + 1) == n:
-            elapsed = time.time() - t0
-            mra = sum(x.partial for x in results) / len(results)
-            print(f"  [{i+1:4d}/{n}] MRA(partial): {mra:.3f} | {elapsed:.0f}s elapsed")
+        mra = sum(x.partial for x in results) / len(results)
+        elapsed = time.time() - t0
+        print(f"  [{i+actual_bs:4d}/{n}] MRA(partial): {mra:.3f} | {elapsed:.0f}s elapsed")
 
     return results
 
