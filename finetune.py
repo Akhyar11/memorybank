@@ -185,11 +185,21 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
 
 # ── Path Resolution ─────────────────────────────────────────────────────────
 def resolve_paths():
+    paths = []
+    tok = LOCAL_TOK
     if os.path.exists(KAGGLE_PARQUET):
-        return KAGGLE_PARQUET, KAGGLE_TOK
-    if os.path.exists(LOCAL_PARQUET):
-        return LOCAL_PARQUET, LOCAL_TOK
-    raise FileNotFoundError("Parquet dataset tidak ditemukan!")
+        paths.append(KAGGLE_PARQUET)
+        tok = KAGGLE_TOK
+    elif os.path.exists(LOCAL_PARQUET):
+        paths.append(LOCAL_PARQUET)
+        
+    if os.path.exists(KAGGLE_JSONL):
+        paths.append(KAGGLE_JSONL)
+        tok = KAGGLE_TOK
+    elif os.path.exists(LOCAL_JSONL):
+        paths.append(LOCAL_JSONL)
+        
+    return paths, tok
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
