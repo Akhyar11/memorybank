@@ -153,7 +153,6 @@ def main():
     
     state        = replicate(state)
     memory_state = replicate(memory_state)
-    empty_memory_replicated = replicate(empty_memory_template)
     
     dataset_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
     tokenizer_path = '/kaggle/input/datasets/akhyarsafrudin/tokenizer/tokenizer.json'
@@ -195,7 +194,7 @@ def main():
             last_log_time = current_time
         
         if step % reset_interval == 0:
-            memory_state = empty_memory_replicated
+            memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
             
     print("\nPhase 2 Fine-Tuning Execution Complete! 🚀")
 

@@ -178,13 +178,11 @@ def main():
     print("Initializing model weights & optimizer...")
     state, memory_state = create_train_state(rng, model, dummy)
 
-    # Pre-compute empty memory template ONCE — dipakai ulang saat reset
-    # Jauh lebih cepat daripada memanggil model.init() setiap N step
+    # Pre-compute empty memory template ONCE
     empty_memory_template = jax.tree_util.tree_map(jnp.zeros_like, memory_state)
 
     state        = replicate(state)
     memory_state = replicate(memory_state)
-    empty_memory_replicated = replicate(empty_memory_template)
     print("Done.\n")
 
     # Pilih sumber data
@@ -226,8 +224,8 @@ def main():
             last_log_time = now
 
         if step % RESET_INTERVAL == 0:
-            # Gunakan template yang sudah di-pre-compute — O(1), tidak re-trace JAX graph
-            memory_state = empty_memory_replicated
+            # Nol-kan memory_state yang sedang berjalan (sharding identik, tidak re-trace)
+            memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")
