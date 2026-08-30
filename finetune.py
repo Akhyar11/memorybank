@@ -176,7 +176,7 @@ def main():
         print(f"Loading Phase 1 weights from {ckpt_dir}...")
         checkpointer = ocp.StandardCheckpointer()
         # Restore state
-        state = checkpointer.restore(os.path.abspath(ckpt_dir), item=state)
+        state = checkpointer.restore(os.path.abspath(ckpt_dir), target=state)
         print("✅ Phase 1 Pre-trained Weights Loaded!")
     else:
         print("⚠️ Warning: Phase 1 checkpoint not found, starting from scratch!")
