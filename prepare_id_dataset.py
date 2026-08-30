@@ -90,9 +90,10 @@ def main():
                 break
     print(f"Using column '{text_column}' for text data.")
     
-    tokenizer_path = os.path.join(args.out_dir, "tokenizer.json")
+    tokenizer_path = "tokenizer/tokenizer.json"
     if not os.path.exists(tokenizer_path):
-        tokenizer = train_tokenizer(dataset, args.vocab_size, tokenizer_path, text_column)
+        print(f"Tokenizer not found at {tokenizer_path}. Please run build_tokenizer.py first.")
+        return
     else:
         print(f"Loading existing tokenizer from {tokenizer_path}")
         tokenizer = Tokenizer.from_file(tokenizer_path)
