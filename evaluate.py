@@ -121,7 +121,10 @@ def greedy_generate_batch(model, variables, tokenizer, prompts: List[str],
     # Duplicate memory state for the batch
     mem = variables.get('memory', {})
     if len(jax.tree_util.tree_leaves(mem)) > 0:
-        mem = jax.tree_util.tree_map(lambda x: jnp.repeat(x, batch_size, axis=0) if x.shape[0] == 1 else x[:batch_size], mem)
+        mem = jax.tree_util.tree_map(
+            lambda x: jnp.repeat(x, batch_size, axis=0) if (jnp.ndim(x) > 0 and x.shape[0] == 1) else (x[:batch_size] if jnp.ndim(x) > 0 else x), 
+            mem
+        )
     
     params = variables['params']
 
