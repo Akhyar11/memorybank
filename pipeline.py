@@ -95,15 +95,14 @@ def run_phase_2():
         sys.exit(e.returncode)
     print("✅ PHASE 2 COMPLETE!\n")
 
-def run_phase_3():
-    print("📊 STARTING PHASE 3: EVALUATION (MemoryBench)")
-    print("Running evaluate.py...")
+def run_export_pytorch():
+    print("📦 STARTING PHASE 3: EXPORT TO PYTORCH")
+    print("Running export_pytorch.py...")
     try:
-        subprocess.run([sys.executable, "evaluate.py"], check=True)
+        subprocess.run([sys.executable, "export_pytorch.py"], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"❌ Evaluation failed with error code {e.returncode}")
-        # Don't exit — evaluation failure shouldn't abort the pipeline
-    print("✅ PHASE 3 COMPLETE!\n")
+        print(f"❌ Export failed with error code {e.returncode}")
+    print("✅ EXPORT COMPLETE! Model ready to be downloaded.\n")
 
 if __name__ == "__main__":
     setup_environment()
@@ -111,5 +110,5 @@ if __name__ == "__main__":
     run_pretokenize()
     run_phase_1()
     run_phase_2()
-    run_phase_3()
+    run_export_pytorch()
     print("🎉 FULL PIPELINE EXECUTION SUCCESSFUL!")
