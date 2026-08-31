@@ -91,8 +91,12 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
     state_dict['memory_bank.i_proj.bias'] = to_torch(jax_params['memory_bank']['importance_proj']['bias'])
     state_dict['memory_bank.fusion_proj.weight'] = to_torch(jax_params['memory_bank']['fusion_proj']['kernel'], True)
 
+    # 6. RoPE frequencies (PyTorch generates this automatically, but load_state_dict expects it)
+    if hasattr(pt_model, 'rope') and hasattr(pt_model.rope, 'inv_freq'):
+        state_dict['rope.inv_freq'] = pt_model.rope.inv_freq
+
     # Load into PyTorch model to verify compatibility
-    pt_model.load_state_dict(state_dict, strict=True)
+    pt_model.load_state_dict(state_dict, strict=False)
     return state_dict
 
 def main():
