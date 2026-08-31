@@ -12,8 +12,14 @@ def clean_text(text):
         return ""
     # 1. Hapus spasi di awal
     text = text.lstrip()
-    # 2. Hapus yang bukan abjad, angka, atau simbol tertentu (, . - + = < > * /)
+    # 2. Hapus titik-titik panjang (seperti daftar isi: "Komentar.......... 8")
+    text = re.sub(r'\.{3,}', ' ', text)
+    # 3. Hapus yang bukan abjad, angka, atau simbol tertentu (, . - + = < > * /)
     text = re.sub(r'[^a-zA-Z0-9\s,\.\-\+\=\<\>\*\/]', '', text)
+    # 4. Hapus spasi ganda yang muncul akibat penghapusan di atas
+    text = re.sub(r'\s+', ' ', text)
+    # 5. Hapus spasi di akhir
+    text = text.rstrip()
     return text
 
 def main():
