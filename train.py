@@ -210,6 +210,12 @@ def prefetch(generator, maxsize=PREFETCH_QUEUE):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
+    # Colab TPU Initialization
+    if 'COLAB_TPU_ADDR' in os.environ:
+        import jax.tools.colab_tpu as colab_tpu
+        colab_tpu.setup_tpu()
+        print("✅ Colab TPU initialized.")
+
     num_devices      = jax.device_count()
     total_batch_size = LOCAL_BATCH_SIZE * num_devices
     print(f"Devices        : {num_devices}")
@@ -219,11 +225,7 @@ def main():
     print(f"Seq len        : {SEQ_LEN}")
     print()
 
-    # Colab TPU Initialization
-    if 'COLAB_TPU_ADDR' in os.environ:
-        import jax.tools.colab_tpu
-        jax.tools.colab_tpu.setup_tpu()
-        print("✅ Colab TPU initialized.")
+
 
     config = MAMoEConfig()
     model  = MAMoEForCausalLM(config=config)
