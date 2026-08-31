@@ -2,11 +2,6 @@ import os
 import sys
 import time
 
-try:
-    import jax.tools.colab_tpu
-    jax.tools.colab_tpu.setup_tpu()
-except Exception:
-    pass
 
 import threading
 import queue
