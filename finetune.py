@@ -143,11 +143,11 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
 
     def get_rows(path):
         if path.endswith('.parquet'):
-            df_sample = pd.read_parquet(path, columns=None, engine='pyarrow')
-            text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in df_sample.columns), df_sample.columns[0])
-            print(f"   Parquet text column: '{text_col}'")
             parquet_file = pq.ParquetFile(path)
-            for batch in parquet_file.iter_batches(batch_size=1000):
+            columns = parquet_file.schema.names
+            text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in columns), columns[0])
+            print(f"   Parquet text column: '{text_col}'")
+            for batch in parquet_file.iter_batches(batch_size=100):
                 for row in batch.to_pylist():
                     yield str(row[text_col])
         elif path.endswith('.jsonl'):
@@ -182,10 +182,11 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
                 for chunk_start in range(0, padded_len, seq_len):
                     chunk = padded[:, chunk_start : chunk_start + seq_len]
                     yield chunk, False
-                
                 yield None, True
                 buffer = []
                 conv_count += 1
+                if conv_count % 100 == 0:
+                    print(f"   [Data] Processed {conv_count} conversations...")
 
 # ── Path Resolution ─────────────────────────────────────────────────────────
 def resolve_paths():
@@ -268,8 +269,15 @@ def main():
                 continue
     
             step += 1
+            if step == 1:
+                print("   [JAX] Triggering XLA Compilation for finetune_step (this may take a few minutes)...")
+            
             sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
             state, memory_state, metrics = finetune_step(state, memory_state, sharded)
+            
+            if step == 1:
+                print("   [JAX] Compilation finished! Training started.")
+                
             total_tokens += total_batch_size * SEQ_LEN
     
             if step % LOG_INTERVAL == 0:
