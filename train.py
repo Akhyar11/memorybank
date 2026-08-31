@@ -112,7 +112,7 @@ def train_step(state, memory_state, batch_inputs):
         log_probs    = jax.nn.log_softmax(logits, axis=-1)
         ce_loss      = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
         mean_ce      = jnp.mean(ce_loss)
-        total_loss   = mean_ce + 0.1 * aux_loss
+        total_loss   = mean_ce + 0.01 * aux_loss
         return total_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
 
     (total_loss, (ce_loss, aux_loss, avg_f_i, new_mem)), grads = jax.value_and_grad(
