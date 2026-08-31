@@ -19,6 +19,17 @@ class MAMoEConfig:
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 2048)
         self.rms_norm_eps = kwargs.get('rms_norm_eps', 1e-6)
         self.rope_theta = kwargs.get('rope_theta', 10000.0)
+        
+        self.memory_capacity = kwargs.get('memory_capacity', 10000)
+        self.memory_top_k = kwargs.get('memory_top_k', 4)
+        self.memory_dim = kwargs.get('memory_dim', 256)
+        self.memory_threshold = kwargs.get('memory_threshold', 0.8)
+        self.mem_alpha = kwargs.get('mem_alpha', 1.0)
+        self.mem_beta = kwargs.get('mem_beta', 0.5)
+        self.mem_gamma = kwargs.get('mem_gamma', 0.1)
+        self.mem_delta = kwargs.get('mem_delta', 0.1)
+        self.mem_decay_rate = kwargs.get('mem_decay_rate', 0.001)
+        self.mem_importance_protection = kwargs.get('mem_importance_protection', 0.5)
 
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps):
