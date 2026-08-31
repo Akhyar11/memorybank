@@ -151,7 +151,18 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
             print(f"   Parquet text column: '{text_col}'")
             for batch in parquet_file.iter_batches(batch_size=100):
                 for row in batch.to_pylist():
-                    yield str(row[text_col])
+                    val = row.get(text_col)
+                    if val is None and row:
+                        val = list(row.values())[0]
+                    
+                    # Jika formatnya array of dict (chat messages)
+                    if isinstance(val, list):
+                        try:
+                            val = "\\n".join([f"{msg.get('role', 'user')}: {msg.get('content', msg.get('text', ''))}" for msg in val if isinstance(msg, dict)])
+                        except:
+                            val = str(val)
+                            
+                    yield str(val)
         elif path.endswith('.jsonl'):
             with open(path, 'r', encoding='utf-8') as f:
                 first_line = f.readline()
@@ -162,7 +173,17 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
                 f.seek(0)
                 for line in f:
                     row = json.loads(line)
-                    yield str(row.get(text_col, ""))
+                    val = row.get(text_col)
+                    if val is None and row:
+                        val = list(row.values())[0]
+                    
+                    if isinstance(val, list):
+                        try:
+                            val = "\\n".join([f"{msg.get('role', 'user')}: {msg.get('content', msg.get('text', ''))}" for msg in val if isinstance(msg, dict)])
+                        except:
+                            val = str(val)
+                            
+                    yield str(val)
 
     for path in data_paths:
         print(f"\nProcessing dataset: {path}")
