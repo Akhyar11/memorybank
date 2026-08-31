@@ -17,7 +17,7 @@ from flax.training import train_state
 from flax.jax_utils import replicate, unreplicate
 
 from mamoe.config import MAMoEConfig
-from mamoe.model import MAMoEForCausalLM
+from mamoe.model import MAMoEForConditionalGeneration
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_PARQUET  = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
@@ -32,6 +32,8 @@ COLAB_JSONL     = '/content/drive/MyDrive/Colab Notebooks/dataset/memorybench_tr
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 SEQ_LEN          = 1024
+ENC_SEQ_LEN      = 512
+DEC_SEQ_LEN      = 512
 LOCAL_BATCH_SIZE = 4      # per device
 GRAD_ACCUM_STEPS = 4      # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL     = 10
@@ -42,14 +44,14 @@ class MAMoETrainState(train_state.TrainState):
     pass
 
 # ── Model Init ───────────────────────────────────────────────────────────────
-def create_train_state(rng, model, dummy_input):
+def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
     import os
     import numpy as np
     import flax
     import flax.traverse_util
     
-    dummy_eos = jnp.zeros((dummy_input.shape[0],), dtype=jnp.int32)
-    variables    = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
+    dummy_eos = jnp.zeros((dummy_enc_input.shape[0],), dtype=jnp.int32)
+    variables    = model.init(rng, input_ids=dummy_enc_input, decoder_input_ids=dummy_dec_input, attention_mask=None, is_eos=dummy_eos)
     params       = variables['params']
     memory_state = variables.get('memory', {})
     
@@ -96,13 +98,14 @@ def create_train_state(rng, model, dummy_input):
 
 # ── Training Step (pmap) ─────────────────────────────────────────────────────
 @functools.partial(jax.pmap, axis_name='batch')
-def finetune_step(state, memory_state, batch_inputs):
-    labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
+def finetune_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
+    labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
         (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
             {'params': params, 'memory': memory_state},
-            batch_inputs,
+            input_ids=batch_enc_inputs,
+            decoder_input_ids=batch_dec_inputs,
             mutable=['memory'],
         )
         vocab_size = logits.shape[-1]
@@ -128,7 +131,7 @@ def finetune_step(state, memory_state, batch_inputs):
 # ── Data Loading — Per-Conversation ─────────────────────────────────────────
 def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
     """
-    Yield (batch, should_reset_memory).
+    Yield (batch_enc, batch_dec).
     """
     import pandas as pd
     from tokenizers import Tokenizer
@@ -204,8 +207,10 @@ def conversation_generator(data_paths, tok_path, total_batch_size, seq_len):
                 
                 for chunk_start in range(0, padded_len, seq_len):
                     chunk = padded[:, chunk_start : chunk_start + seq_len]
-                    yield chunk, False
-                yield None, True
+                    batch_enc = chunk[:, :ENC_SEQ_LEN]
+                    batch_dec = chunk[:, ENC_SEQ_LEN:]
+                    yield batch_enc, batch_dec
+                
                 buffer = []
                 conv_count += 1
                 if conv_count % 100 == 0:
@@ -253,12 +258,13 @@ def main():
 
 
     config = MAMoEConfig()
-    model  = MAMoEForCausalLM(config=config)
+    model  = MAMoEForConditionalGeneration(config=config)
     rng    = jax.random.PRNGKey(0)
 
-    dummy  = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
+    dummy_enc = jnp.ones((LOCAL_BATCH_SIZE, ENC_SEQ_LEN), dtype=jnp.int32)
+    dummy_dec = jnp.ones((LOCAL_BATCH_SIZE, DEC_SEQ_LEN), dtype=jnp.int32)
     print("Initializing model for Phase 2: Fine-Tuning...")
-    state, memory_state = create_train_state(rng, model, dummy)
+    state, memory_state = create_train_state(rng, model, dummy_enc, dummy_dec)
     
     # --- LOAD PHASE 1 CHECKPOINT ---
     ckpt_dir = '/kaggle/working/checkpoints/phase1' if os.path.exists('/kaggle') else 'checkpoints/phase1'
@@ -285,30 +291,24 @@ def main():
         
     dataloader = conversation_generator(data_paths, tok_path, total_batch_size, SEQ_LEN)
 
-    print(f"Starting Phase 2: Fine-Tuning ({NUM_EPOCHS} Epochs, per-conversation memory reset)...\n")
+    print(f"Starting Phase 2: Fine-Tuning ({NUM_EPOCHS} Epochs, without memory reset)...\n")
     start_time    = time.time()
     last_log_time = start_time
     total_tokens  = 0
     step          = 0
-    conv_resets   = 0
 
     for epoch in range(1, NUM_EPOCHS + 1):
         print(f"\n========== EPOCH {epoch}/{NUM_EPOCHS} ==========")
         dataloader = conversation_generator(data_paths, tok_path, total_batch_size, SEQ_LEN)
         
-        for batch, should_reset in dataloader:
-            if should_reset:
-                # Reset memory di batas antar conversation — inilah yang benar
-                memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
-                conv_resets += 1
-                continue
-    
+        for batch_enc, batch_dec in dataloader:
             step += 1
             if step == 1:
                 print("   [JAX] Triggering XLA Compilation for finetune_step (this may take a few minutes)...")
             
-            sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            state, memory_state, metrics = finetune_step(state, memory_state, sharded)
+            sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, ENC_SEQ_LEN))
+            sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
+            state, memory_state, metrics = finetune_step(state, memory_state, sharded_enc, sharded_dec)
             
             if step == 1:
                 print("   [JAX] Compilation finished! Training started.")
@@ -328,7 +328,6 @@ def main():
                     f"CE {ce_val:.4f} | "
                     f"Aux {aux_val:.4f} | "
                     f"Speed {tok_per_sec:>8,.0f} tok/s | "
-                    f"Conv resets: {conv_resets} | "
                     f"Elapsed {elapsed//60}m {elapsed%60:02d}s"
                 )
                 print(f"          Expert load: [{expert_str}]")
@@ -337,7 +336,6 @@ def main():
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 2 Complete!  "
           f"Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  "
-          f"Conversations: {conv_resets}  |  "
           f"Tokens: {total_tokens:,}")
 
     # --- SAVE CHECKPOINT ---

@@ -19,7 +19,7 @@ from flax.training import train_state
 from flax.jax_utils import replicate, unreplicate
 
 from mamoe.config import MAMoEConfig
-from mamoe.model import MAMoEForCausalLM
+from mamoe.model import MAMoEForConditionalGeneration
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_TOKENS   = '/kaggle/working/vqfat_tokens.npy'
@@ -33,6 +33,8 @@ COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_cosmoped
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 SEQ_LEN           = 1024
+ENC_SEQ_LEN       = 512
+DEC_SEQ_LEN       = 512
 LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
 GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL      = 10
@@ -44,14 +46,14 @@ class MAMoETrainState(train_state.TrainState):
     pass
 
 # ── Model Init ───────────────────────────────────────────────────────────────
-def create_train_state(rng, model, dummy_input):
+def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
     import os
     import numpy as np
     import flax
     import flax.traverse_util
     
-    dummy_eos = jnp.zeros((dummy_input.shape[0],), dtype=jnp.int32)
-    variables    = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
+    dummy_eos = jnp.zeros((dummy_enc_input.shape[0],), dtype=jnp.int32)
+    variables    = model.init(rng, input_ids=dummy_enc_input, decoder_input_ids=dummy_dec_input, attention_mask=None, is_eos=dummy_eos)
     params         = variables['params']
     memory_state   = variables.get('memory', {})
 
@@ -97,19 +99,16 @@ def create_train_state(rng, model, dummy_input):
     state = MAMoETrainState.create(apply_fn=model.apply, params=params, tx=tx)
     return state, memory_state
 
-def get_empty_memory_state(rng, model, dummy_input):
-    variables = model.init(rng, dummy_input)
-    return variables.get('memory', {})
-
 # ── Training Step (pmap) ─────────────────────────────────────────────────────
 @functools.partial(jax.pmap, axis_name='batch')
-def train_step(state, memory_state, batch_inputs):
-    labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
+def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
+    labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
         (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
             {'params': params, 'memory': memory_state},
-            batch_inputs,
+            input_ids=batch_enc_inputs,
+            decoder_input_ids=batch_dec_inputs,
             mutable=['memory'],
         )
         vocab_size   = logits.shape[-1]
@@ -228,22 +227,19 @@ def main():
 
 
     config = MAMoEConfig()
-    model  = MAMoEForCausalLM(config=config)
+    model  = MAMoEForConditionalGeneration(config=config)
     rng    = jax.random.PRNGKey(42)
 
-    dummy  = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
+    dummy_enc = jnp.ones((LOCAL_BATCH_SIZE, ENC_SEQ_LEN), dtype=jnp.int32)
+    dummy_dec = jnp.ones((LOCAL_BATCH_SIZE, DEC_SEQ_LEN), dtype=jnp.int32)
     print("Initializing model weights & optimizer...")
-    state, memory_state = create_train_state(rng, model, dummy)
-
-    # Pre-compute empty memory template ONCE
-    empty_memory_template = jax.tree_util.tree_map(jnp.zeros_like, memory_state)
+    state, memory_state = create_train_state(rng, model, dummy_enc, dummy_dec)
 
     state        = replicate(state)
     memory_state = replicate(memory_state)
     print("Done.\n")
     # Catatan: Memory TIDAK di-reset selama pre-training.
     # Memory dibiarkan mengakumulasi konteks dari teks secara natural.
-    # Reset hanya berlaku di finetune.py (conversation boundary).
 
     print(f"Starting Phase 1: Full Pre-Training ({NUM_EPOCHS} Epochs) ...\n")
     start_time     = time.time()
@@ -267,9 +263,14 @@ def main():
             global_step += 1
             # Cast to int32 for JAX
             batch         = batch.astype(np.int32)
-            sharded_batch = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            
+            batch_enc = batch[:, :ENC_SEQ_LEN]
+            batch_dec = batch[:, ENC_SEQ_LEN:]
+            
+            sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, ENC_SEQ_LEN))
+            sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
     
-            state, memory_state, metrics = train_step(state, memory_state, sharded_batch)
+            state, memory_state, metrics = train_step(state, memory_state, sharded_enc, sharded_dec)
             total_tokens += total_batch_size * SEQ_LEN
     
             if global_step % LOG_INTERVAL == 0:
