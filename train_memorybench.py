@@ -16,7 +16,7 @@ jax.config.update('jax_default_matmul_precision', 'bfloat16')
 from flax.training import train_state
 from flax.jax_utils import replicate, unreplicate
 from mamoe.config import MAMoEConfig
-from mamoe.model import MAMoEForCausalLM
+from mamoe.model import MAMoEForConditionalGeneration
 
 KAGGLE_JSONL    = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train_samples.jsonl'
 LOCAL_JSONL     = 'data/raw/memorybench_train_samples.jsonl'
@@ -26,6 +26,7 @@ KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
 
 SEQ_LEN          = 1024
+DEC_SEQ_LEN      = 256
 LOCAL_BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 4
 LOG_INTERVAL     = 10
@@ -34,12 +35,12 @@ NUM_EPOCHS       = 3
 class MAMoETrainState(train_state.TrainState):
     pass
 
-def create_train_state(rng, model, dummy_input):
+def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
     import flax
     import flax.traverse_util
     
-    dummy_eos = jnp.zeros((dummy_input.shape[0],), dtype=jnp.int32)
-    variables    = model.init(rng, dummy_input, attention_mask=None, is_eos=dummy_eos)
+    dummy_eos = jnp.zeros((dummy_enc_input.shape[0],), dtype=jnp.int32)
+    variables    = model.init(rng, input_ids=dummy_enc_input, decoder_input_ids=dummy_dec_input, attention_mask=None, is_eos=dummy_eos)
     params       = variables['params']
     memory_state = variables.get('memory', {})
     
@@ -71,19 +72,20 @@ def create_train_state(rng, model, dummy_input):
     return MAMoETrainState.create(apply_fn=model.apply, params=params, tx=tx), memory_state
 
 @functools.partial(jax.pmap, axis_name='batch')
-def finetune_step(state, memory_state, batch_inputs, batch_masks):
-    labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
-    target_masks = jnp.roll(batch_masks, shift=-1, axis=1).at[:, -1].set(0)
+def finetune_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
+    labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
         (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
-            {'params': params, 'memory': memory_state}, batch_inputs, mutable=['memory'],
+            {'params': params, 'memory': memory_state}, 
+            input_ids=batch_enc_inputs, 
+            decoder_input_ids=batch_dec_inputs,
+            mutable=['memory'],
         )
         vocab_size = logits.shape[-1]
         log_probs  = jax.nn.log_softmax(logits, axis=-1)
         ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-        # Combine target_masks with non-zero padding check
-        loss_mask  = target_masks * (labels != 0).astype(jnp.float32)
+        loss_mask  = (labels != 0).astype(jnp.float32)
         mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
         return mean_ce + 0.01 * aux_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
 
@@ -97,18 +99,19 @@ def finetune_step(state, memory_state, batch_inputs, batch_masks):
     return state, new_mem, {'ce_loss': ce_loss, 'aux_loss': aux_loss, 'expert_load': avg_f_i}
 
 @functools.partial(jax.pmap, axis_name='batch')
-def eval_step(state, memory_state, batch_inputs, batch_masks):
-    labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
-    target_masks = jnp.roll(batch_masks, shift=-1, axis=1).at[:, -1].set(0)
+def eval_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
+    labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
     
     (logits, _, _, aux_loss, _), mutated = state.apply_fn(
-        {'params': state.params, 'memory': memory_state}, batch_inputs, mutable=['memory'],
+        {'params': state.params, 'memory': memory_state}, 
+        input_ids=batch_enc_inputs, 
+        decoder_input_ids=batch_dec_inputs,
+        mutable=['memory'],
     )
     vocab_size = logits.shape[-1]
     log_probs  = jax.nn.log_softmax(logits, axis=-1)
     ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-    # Validation hanya dihitung di target mask (Ground Truth)
-    loss_mask  = target_masks * (labels != 0).astype(jnp.float32)
+    loss_mask  = (labels != 0).astype(jnp.float32)
     mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
     
     ce_loss  = jax.lax.pmean(mean_ce, axis_name='batch')
@@ -146,43 +149,41 @@ def load_data(path):
     split_idx = int(0.9 * len(samples))
     return samples[:split_idx], samples[split_idx:]
 
-def conversation_generator(samples, tok_path, total_batch_size, seq_len):
+def conversation_generator(samples, tok_path, total_batch_size, enc_seq_len, dec_seq_len):
     from tokenizers import Tokenizer
     tokenizer = Tokenizer.from_file(tok_path)
-    buffer_ids = []
-    buffer_masks = []
+    buffer_enc = []
+    buffer_dec = []
+    
+    # Simple BOS token assumption, often 1 or 2. We can use tokenizer.encode("").ids for prefix or just 1.
+    bos_id = getattr(tokenizer, 'bos_token_id', 1) 
     
     for prompt, answer in samples:
         prompt_tokens = tokenizer.encode(prompt).ids if prompt else []
         answer_tokens = tokenizer.encode(answer).ids
-        total_tokens = prompt_tokens + answer_tokens
-        mask = [0] * len(prompt_tokens) + [1] * len(answer_tokens)
+        dec_tokens = [bos_id] + answer_tokens
         
-        # Truncate left if too long
-        if len(total_tokens) > seq_len:
-            total_tokens = total_tokens[-seq_len:]
-            mask = mask[-seq_len:]
+        if len(prompt_tokens) > enc_seq_len:
+            prompt_tokens = prompt_tokens[-enc_seq_len:]
+        if len(dec_tokens) > dec_seq_len:
+            dec_tokens = dec_tokens[:dec_seq_len]
             
-        buffer_ids.append(total_tokens)
-        buffer_masks.append(mask)
+        buffer_enc.append(prompt_tokens)
+        buffer_dec.append(dec_tokens)
         
-        if len(buffer_ids) == total_batch_size:
-            max_len = max(len(ids) for ids in buffer_ids)
-            padded_len = ((max_len + seq_len - 1) // seq_len) * seq_len
-            if padded_len == 0: padded_len = seq_len
+        if len(buffer_enc) == total_batch_size:
+            padded_enc = np.zeros((total_batch_size, enc_seq_len), dtype=np.int32)
+            padded_dec = np.zeros((total_batch_size, dec_seq_len), dtype=np.int32)
             
-            padded_ids = np.zeros((total_batch_size, padded_len), dtype=np.int32)
-            padded_masks = np.zeros((total_batch_size, padded_len), dtype=np.int32)
-            
-            for i, (ids, m) in enumerate(zip(buffer_ids, buffer_masks)):
-                padded_ids[i, :len(ids)] = ids
-                padded_masks[i, :len(m)] = m
+            for i, (e_ids, d_ids) in enumerate(zip(buffer_enc, buffer_dec)):
+                padded_enc[i, :len(e_ids)] = e_ids
+                padded_dec[i, :len(d_ids)] = d_ids
                 
-            for chunk_start in range(0, padded_len, seq_len):
-                yield padded_ids[:, chunk_start : chunk_start + seq_len], padded_masks[:, chunk_start : chunk_start + seq_len], False
-            yield None, None, True
-            buffer_ids = []
-            buffer_masks = []
+            yield padded_enc, padded_dec, False
+            buffer_enc = []
+            buffer_dec = []
+            
+    yield None, None, True
 
 def resolve_paths():
     tok = LOCAL_TOK
@@ -209,11 +210,12 @@ def main():
     print(f"Split: {len(train_texts)} train, {len(val_texts)} validation.")
 
     config = MAMoEConfig()
-    model  = MAMoEForCausalLM(config=config)
+    model  = MAMoEForConditionalGeneration(config=config)
     rng    = jax.random.PRNGKey(0)
     
-    dummy = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
-    state, memory_state = create_train_state(rng, model, dummy)
+    dummy_enc = jnp.ones((LOCAL_BATCH_SIZE, SEQ_LEN), dtype=jnp.int32)
+    dummy_dec = jnp.ones((LOCAL_BATCH_SIZE, DEC_SEQ_LEN), dtype=jnp.int32)
+    state, memory_state = create_train_state(rng, model, dummy_enc, dummy_dec)
     
     ckpt_dir = '/kaggle/working/checkpoints/phase1' if os.path.exists('/kaggle') else 'checkpoints/phase1'
     if os.path.exists(ckpt_dir):
@@ -230,18 +232,18 @@ def main():
         print(f"\n========== EPOCH {epoch}/{NUM_EPOCHS} ==========")
         
         # --- TRAIN ---
-        train_loader = conversation_generator(train_texts, tok_path, total_batch_size, SEQ_LEN)
+        train_loader = conversation_generator(train_texts, tok_path, total_batch_size, SEQ_LEN, DEC_SEQ_LEN)
         step = 0
         last_log = time.time()
-        for batch, mask, should_reset in train_loader:
+        for batch_enc, batch_dec, should_reset in train_loader:
             if should_reset:
                 memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
                 continue
             
             step += 1
-            sharded_inputs = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            sharded_masks = mask.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            state, memory_state, metrics = finetune_step(state, memory_state, sharded_inputs, sharded_masks)
+            sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
+            state, memory_state, metrics = finetune_step(state, memory_state, sharded_enc, sharded_dec)
             
             if step % LOG_INTERVAL == 0:
                 ce = float(unreplicate(metrics['ce_loss']))
@@ -250,15 +252,15 @@ def main():
                 
         # --- EVAL ---
         print(f"\nRunning Validation...")
-        val_loader = conversation_generator(val_texts, tok_path, total_batch_size, SEQ_LEN)
+        val_loader = conversation_generator(val_texts, tok_path, total_batch_size, SEQ_LEN, DEC_SEQ_LEN)
         val_ce, val_steps = 0.0, 0
-        for batch, mask, should_reset in val_loader:
+        for batch_enc, batch_dec, should_reset in val_loader:
             if should_reset:
                 val_memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), val_memory_state)
                 continue
-            sharded_inputs = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            sharded_masks = mask.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            val_memory_state, metrics = eval_step(state, val_memory_state, sharded_inputs, sharded_masks)
+            sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
+            val_memory_state, metrics = eval_step(state, val_memory_state, sharded_enc, sharded_dec)
             val_ce += float(unreplicate(metrics['ce_loss']))
             val_steps += 1
             
