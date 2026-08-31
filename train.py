@@ -1,7 +1,9 @@
 import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
 import sys
 import time
-
 
 import threading
 import queue
