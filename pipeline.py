@@ -9,23 +9,27 @@ def setup_environment():
         print("⚙️  Local environment detected. Skipping JAX auto-fix.")
         return
 
-    print("⚙️  Kaggle environment detected. Fixing JAX CUDA compatibility...")
-    
-    # Step 1: Remove the incompatible plugin and jaxlib
-    subprocess.run([
-        sys.executable, "-m", "pip", "uninstall", "-y",
-        "jax", "jaxlib", "jax-cuda12-plugin", "jax-cuda12-pjrt"
-    ], capture_output=True)
-    
-    # Step 2: Reinstall a clean, CUDA-12 compatible JAX bundle
-    result = subprocess.run([
-        sys.executable, "-m", "pip", "install", "-q", "-U", "jax[cuda12]"
-    ], capture_output=True, text=True)
-    if result.returncode != 0:
-        print("⚠️  jax[cuda12] install failed, trying CPU-only JAX as fallback...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "jax"], check=True)
+    is_tpu = 'TPU_NAME' in os.environ or 'COLAB_TPU_ADDR' in os.environ
+    if is_tpu:
+        print("⚙️  Kaggle TPU detected. Skipping JAX CUDA reinstall to preserve TPU bundle.")
     else:
-        print("✅ JAX[CUDA12] installed successfully.")
+        print("⚙️  Kaggle GPU/CPU environment detected. Fixing JAX CUDA compatibility...")
+        
+        # Step 1: Remove the incompatible plugin and jaxlib
+        subprocess.run([
+            sys.executable, "-m", "pip", "uninstall", "-y",
+            "jax", "jaxlib", "jax-cuda12-plugin", "jax-cuda12-pjrt"
+        ], capture_output=True)
+        
+        # Step 2: Reinstall a clean, CUDA-12 compatible JAX bundle
+        result = subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q", "-U", "jax[cuda12]"
+        ], capture_output=True, text=True)
+        if result.returncode != 0:
+            print("⚠️  jax[cuda12] install failed, trying CPU-only JAX as fallback...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "jax"], check=True)
+        else:
+            print("✅ JAX[CUDA12] installed successfully.")
     
     # Step 3: Install remaining pipeline dependencies (force upgrade to match JAX 0.11.x)
     subprocess.run([
