@@ -5,12 +5,17 @@ import time
 
 import threading
 import queue
+import re
+import torch
 import jax
 import jax.numpy as jnp
 import optax
 import numpy as np
 import functools
 import orbax.checkpoint as ocp
+
+from export_pytorch import convert_jax_to_pytorch
+from scripts.pytorch.pytorch_model import MAMoEForConditionalGeneration as PyTorchMAMoE, MAMoEConfig as PyTorchConfig
 
 # ── Optimasi Tensor Core (T4/P100 bfloat16) ─────────────────────────────────
 jax.config.update('jax_default_matmul_precision', 'bfloat16')
@@ -39,7 +44,7 @@ LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
 GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL      = 10
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
-NUM_EPOCHS        = 5
+NUM_EPOCHS        = 20
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MAMoETrainState(train_state.TrainState):
@@ -134,23 +139,17 @@ def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
 
 # ── Data Loading ─────────────────────────────────────────────────────────────
 def resolve_data_paths():
-    """Pilih path dataset: npy → csv kaggle → csv lokal"""
-    if os.path.exists(KAGGLE_TOKENS):
-        print(f"⚡ Fast path: loading pre-tokenized npy → {KAGGLE_TOKENS}")
-        return 'npy', KAGGLE_TOKENS, None
-    if os.path.exists(LOCAL_TOKENS):
-        print(f"⚡ Fast path: loading pre-tokenized npy → {LOCAL_TOKENS}")
-        return 'npy', LOCAL_TOKENS, None
+    """Pilih path dataset: SELALU paksa ke CSV/Parquet agar regex berjalan."""
     if os.path.exists(KAGGLE_CSV):
-        print(f"⚠️  npy tidak ditemukan, streaming CSV → {KAGGLE_CSV}")
+        print(f"✅ Streaming File (dengan Regex Cleaning) → {KAGGLE_CSV}")
         return 'csv', KAGGLE_CSV, KAGGLE_TOK
     if os.path.exists(LOCAL_CSV):
-        print(f"⚠️  npy tidak ditemukan, streaming CSV → {LOCAL_CSV}")
+        print(f"✅ Streaming File (dengan Regex Cleaning) → {LOCAL_CSV}")
         return 'csv', LOCAL_CSV, LOCAL_TOK
     if os.path.exists(COLAB_CSV):
-        print(f"⚠️  npy tidak ditemukan, streaming CSV → {COLAB_CSV}")
+        print(f"✅ Streaming File (dengan Regex Cleaning) → {COLAB_CSV}")
         return 'csv', COLAB_CSV, LOCAL_TOK
-    raise FileNotFoundError("Tidak ada dataset ditemukan!")
+    raise FileNotFoundError("Tidak ada dataset mentah ditemukan!")
 
 def npy_epoch_generator(npy_path, total_batch_size, seq_len):
     """Load npy PENUH ke RAM (bukan mmap), yield batch acak — MAKSIMAL CEPAT."""
@@ -179,8 +178,19 @@ def csv_epoch_generator(csv_path, tok_path, total_batch_size, seq_len):
         col   = next((c for c in ["text","prompt","content","completion","text_clean","article"]
                       if c in chunk.columns), chunk.columns[0])
         texts = chunk[col].dropna().astype(str).tolist()
+        
+        # --- PEMBERSIHAN DATASET DENGAN REGEX ---
+        cleaned_texts = []
+        for text in texts:
+            # 1. Hapus spasi di awal
+            text = text.lstrip()
+            # 2. Hapus yang bukan abjad, angka, atau simbol tertentu (, . - + = < > * /)
+            text = re.sub(r'[^a-zA-Z0-9\s,\.\-\+\=\<\>\*\/]', '', text)
+            cleaned_texts.append(text)
+        # ----------------------------------------
+        
         ids   = []
-        for enc in tokenizer.encode_batch(texts):
+        for enc in tokenizer.encode_batch(cleaned_texts):
             ids.extend(enc.ids)
         n   = len(ids) // seq_len
         arr = np.array(ids[:n * seq_len], dtype=np.uint16).reshape(n, seq_len)
@@ -295,23 +305,23 @@ def main():
                 print(f"          Expert load: [{expert_str}]")
                 last_log_time = now
 
-
+        # --- SAVE CHECKPOINT PYTORCH PER EPOCH ---
+        print(f"\n💾 Saving PyTorch checkpoint for Epoch {epoch}...")
+        ckpt_dir = '/kaggle/working/checkpoints' if os.path.exists('/kaggle') else 'checkpoints'
+        os.makedirs(ckpt_dir, exist_ok=True)
+        
+        unreplicated_state = unreplicate(state)
+        
+        config_pt = PyTorchConfig()
+        pt_model = PyTorchMAMoE(config_pt)
+        state_dict = convert_jax_to_pytorch(unreplicated_state.params, pt_model, config_pt)
+        
+        out_path = os.path.join(ckpt_dir, f'pytorch_model_epoch_{epoch}.pt')
+        torch.save(state_dict, out_path)
+        print(f"✅ PyTorch Checkpoint saved to: {out_path}\n")
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")
-
-    # --- SAVE CHECKPOINT ---
-    print("\n💾 Saving Phase 1 checkpoint...")
-    ckpt_dir = '/kaggle/working/checkpoints/phase1' if os.path.exists('/kaggle') else 'checkpoints/phase1'
-    os.makedirs(ckpt_dir, exist_ok=True)
-    
-    # We must unreplicate the state before saving so it's a single copy, not sharded across GPUs
-    unreplicated_state = unreplicate(state)
-    
-    checkpointer = ocp.StandardCheckpointer()
-    checkpointer.save(os.path.abspath(ckpt_dir), unreplicated_state, force=True)
-    checkpointer.wait_until_finished()
-    print(f"✅ Checkpoint saved to: {ckpt_dir}")
 
 if __name__ == '__main__':
     main()
