@@ -26,13 +26,13 @@ from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForConditionalGeneration
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
-KAGGLE_TOKENS   = '/kaggle/working/wikipedia_tokens.npy'
-KAGGLE_CSV      = '/kaggle/working/data/raw/wikipedia_id.parquet'
+KAGGLE_TOKENS   = '/kaggle/working/data/pretrain/vqfat_clean_tokens.npy'
+KAGGLE_CSV      = '/kaggle/working/data/raw/vqfat_clean.csv'
 KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
-LOCAL_TOKENS    = 'data/pretrain/wikipedia_tokens.npy'
-LOCAL_CSV       = 'data/raw/wikipedia_id.parquet'
+LOCAL_TOKENS    = 'data/pretrain/vqfat_clean_tokens.npy'
+LOCAL_CSV       = 'data/raw/vqfat_clean.csv'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
-COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/wikipedia_id.parquet'
+COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_clean.csv'
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
@@ -138,12 +138,18 @@ def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
 
 # ── Data Loading ─────────────────────────────────────────────────────────────
 def resolve_data_paths():
-    """Pilih path dataset: SELALU paksa ke CSV/Parquet agar regex berjalan."""
+    """Pilih path dataset: Prioritaskan .npy agar RAM cepat."""
+    if os.path.exists(KAGGLE_TOKENS):
+        print(f"⚡ Fast path: loading pre-tokenized npy → {KAGGLE_TOKENS}")
+        return 'npy', KAGGLE_TOKENS, None
+    if os.path.exists(LOCAL_TOKENS):
+        print(f"⚡ Fast path: loading pre-tokenized npy → {LOCAL_TOKENS}")
+        return 'npy', LOCAL_TOKENS, None
     if os.path.exists(KAGGLE_CSV):
-        print(f"✅ Streaming File (dengan Regex Cleaning) → {KAGGLE_CSV}")
+        print(f"⚠️  npy tidak ditemukan, streaming CSV → {KAGGLE_CSV}")
         return 'csv', KAGGLE_CSV, KAGGLE_TOK
     if os.path.exists(LOCAL_CSV):
-        print(f"✅ Streaming File (dengan Regex Cleaning) → {LOCAL_CSV}")
+        print(f"⚠️  npy tidak ditemukan, streaming CSV → {LOCAL_CSV}")
         return 'csv', LOCAL_CSV, LOCAL_TOK
     if os.path.exists(COLAB_CSV):
         print(f"✅ Streaming File (dengan Regex Cleaning) → {COLAB_CSV}")
