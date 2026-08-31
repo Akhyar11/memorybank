@@ -3,7 +3,7 @@ import torch
 import jax
 import orbax.checkpoint as ocp
 import numpy as np
-from pytorch_model import MAMoEForConditionalGeneration, MAMoEConfig
+from scripts.pytorch.pytorch_model import MAMoEForConditionalGeneration, MAMoEConfig
 
 def convert_jax_to_pytorch(jax_params, pt_model, config):
     state_dict = {}
