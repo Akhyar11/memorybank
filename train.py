@@ -26,8 +26,8 @@ from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForConditionalGeneration
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
-KAGGLE_TOKENS   = '/kaggle/working/data/pretrain/vqfat_clean_tokens.npy'
-KAGGLE_CSV      = '/kaggle/working/data/raw/vqfat_clean.csv'
+KAGGLE_TOKENS   = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_clean_tokens.npy'
+KAGGLE_CSV      = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_clean.csv'
 KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_TOKENS    = 'data/pretrain/vqfat_clean_tokens.npy'
 LOCAL_CSV       = 'data/raw/vqfat_clean.csv'
