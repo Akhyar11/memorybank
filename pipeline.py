@@ -31,11 +31,15 @@ def setup_environment():
         else:
             print("✅ JAX[CUDA12] installed successfully.")
     
-    # Step 3: Install remaining pipeline dependencies (force upgrade to match JAX 0.11.x)
-    subprocess.run([
-        sys.executable, "-m", "pip", "install", "-q", "-U",
+    # Step 3: Install remaining pipeline dependencies
+    install_cmd = [sys.executable, "-m", "pip", "install", "-q"]
+    if not is_tpu:
+        install_cmd.append("-U") # Force upgrade on GPU/CPU to match new JAX
+        
+    install_cmd.extend([
         "flax", "optax", "orbax-checkpoint", "tokenizers", "pandas", "pyarrow", "fastparquet"
-    ], check=True)
+    ])
+    subprocess.run(install_cmd, check=True)
     print("✅ All dependencies ready.\n")
 
 def check_kaggle_environment():
