@@ -110,8 +110,9 @@ def train_step(state, memory_state, batch_inputs):
         )
         vocab_size   = logits.shape[-1]
         log_probs    = jax.nn.log_softmax(logits, axis=-1)
-        ce_loss      = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-        mean_ce      = jnp.mean(ce_loss)
+        ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
+        loss_mask  = (labels != 0).astype(jnp.float32)
+        mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
         total_loss   = mean_ce + 0.01 * aux_loss
         return total_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
 
