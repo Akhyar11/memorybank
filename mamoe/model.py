@@ -80,7 +80,7 @@ class MAMoEEncoder(nn.Module):
         total_aux_loss = 0.0
         total_f_i = jnp.zeros(self.config.num_experts)
         for i in range(self.config.num_hidden_layers):
-            block = MAMoEEncoderBlock(config=self.config, name=f'layers_{i}')
+            block = nn.remat(MAMoEEncoderBlock)(config=self.config, name=f'layers_{i}')
             hidden_states, block_aux_loss, block_f_i = block(hidden_states, freqs_cis, attention_mask)
             total_aux_loss += block_aux_loss
             total_f_i += block_f_i
@@ -107,7 +107,7 @@ class MAMoEDecoder(nn.Module):
         total_aux_loss = 0.0
         total_f_i = jnp.zeros(self.config.num_experts)
         for i in range(self.config.num_hidden_layers):
-            block = MAMoEDecoderBlock(config=self.config, name=f'layers_{i}')
+            block = nn.remat(MAMoEDecoderBlock)(config=self.config, name=f'layers_{i}')
             hidden_states, block_aux_loss, block_f_i = block(hidden_states, context_states, freqs_cis, attention_mask, cross_attention_mask)
             total_aux_loss += block_aux_loss
             total_f_i += block_f_i
