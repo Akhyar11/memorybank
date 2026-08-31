@@ -33,6 +33,8 @@ def load_model_and_tokenizer(model_path='pytorch_model.pt', tok_path='tokenizer_
     
     return model, tokenizer, device
 
+import time
+
 def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9):
     # Dapatkan ID untuk token pemisah/akhir (tergantung dataset, biasanya [SEP] atau <|im_end|>)
     eos_token_id = tokenizer.token_to_id("[SEP]") 
@@ -44,6 +46,9 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0
     generated = input_ids.copy()
     
     print("\nAI: ", end="", flush=True)
+    
+    start_time = time.time()
+    num_generated = 0
     
     with torch.no_grad():
         for _ in range(max_new_tokens):
@@ -71,6 +76,8 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0
                 probs = F.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1).item()
             
+            num_generated += 1
+            
             # Jika memprediksi End-of-Sequence, berhenti
             if next_token == eos_token_id:
                 break
@@ -88,7 +95,11 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0
                 
             print(new_word, end="", flush=True)
             
-    print() # Enter setelah selesai
+    end_time = time.time()
+    elapsed = end_time - start_time
+    tok_per_sec = num_generated / elapsed if elapsed > 0 else 0
+    
+    print(f"\n\n[⏱️ Kecepatan: {tok_per_sec:.2f} tok/detik | Total: {num_generated} token]")
 
 def main():
     print("🚀 Inisialisasi Memory Bank - Local Chat Mode\n")
