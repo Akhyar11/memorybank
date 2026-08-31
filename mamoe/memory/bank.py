@@ -236,17 +236,28 @@ class MemoryBank(nn.Module):
             
             target_idx = jnp.where(is_update, nearest_idx, insert_idx)
             
-            # Apply changes ONLY if do_write is True
-            keys = jnp.where(do_write, keys.at[target_idx].set(k_n), keys)
-            vals = jnp.where(do_write, vals.at[target_idx].set(jnp.where(is_update, updated_v, v_n)), vals)
-            imp = jnp.where(do_write, imp.at[target_idx].set(jnp.where(is_update, jnp.maximum(imp[nearest_idx], i_n), i_n)), imp)
-            conf = jnp.where(do_write, conf.at[target_idx].set(jnp.where(is_update, updated_c, c_n)), conf)
-            state = jnp.where(do_write, state.at[target_idx].set(STATE_ACTIVE), state)
-            last_acc = jnp.where(do_write, last_acc.at[target_idx].set(step), last_acc)
+            # Apply changes ONLY if do_write is True using XLA-friendly dynamic_update_slice
+            # Instead of branching the entire 10000x256 array, we only branch the value being inserted!
+            keys = keys.at[target_idx].set(jnp.where(do_write, k_n, keys[target_idx]))
+            
+            new_v = jnp.where(is_update, updated_v, v_n)
+            vals = vals.at[target_idx].set(jnp.where(do_write, new_v, vals[target_idx]))
+            
+            new_i = jnp.where(is_update, jnp.maximum(imp[nearest_idx], i_n), i_n)
+            imp = imp.at[target_idx].set(jnp.where(do_write, new_i, imp[target_idx]))
+            
+            new_c = jnp.where(is_update, updated_c, c_n)
+            conf = conf.at[target_idx].set(jnp.where(do_write, new_c, conf[target_idx]))
+            
+            state = state.at[target_idx].set(jnp.where(do_write, STATE_ACTIVE, state[target_idx]))
+            last_acc = last_acc.at[target_idx].set(jnp.where(do_write, step, last_acc[target_idx]))
             
             # Only reset created_at and access_count on INSERT
-            created = jnp.where(do_write, created.at[target_idx].set(jnp.where(is_update, created[target_idx], step)), created)
-            acc_cnt = jnp.where(do_write, acc_cnt.at[target_idx].set(jnp.where(is_update, acc_cnt[target_idx] + 1, 1)), acc_cnt)
+            new_created = jnp.where(is_update, created[target_idx], step)
+            created = created.at[target_idx].set(jnp.where(do_write, new_created, created[target_idx]))
+            
+            new_acc = jnp.where(is_update, acc_cnt[target_idx] + 1, 1)
+            acc_cnt = acc_cnt.at[target_idx].set(jnp.where(do_write, new_acc, acc_cnt[target_idx]))
             
             return (keys, vals, state, imp, conf, created, last_acc, acc_cnt), None
 
