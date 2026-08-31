@@ -22,13 +22,13 @@ from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForConditionalGeneration
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
-KAGGLE_TOKENS   = '/kaggle/working/vqfat_tokens.npy'
-KAGGLE_CSV      = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_cosmopedia_id.csv'
+KAGGLE_TOKENS   = '/kaggle/working/wikipedia_tokens.npy'
+KAGGLE_CSV      = '/kaggle/working/data/raw/wikipedia_id.parquet'
 KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
-LOCAL_TOKENS    = 'data/pretrain/vqfat_tokens.npy'
-LOCAL_CSV       = 'data/raw/vqfat_cosmopedia_id.csv'
+LOCAL_TOKENS    = 'data/pretrain/wikipedia_tokens.npy'
+LOCAL_CSV       = 'data/raw/wikipedia_id.parquet'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
-COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_cosmopedia_id.csv'
+COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/wikipedia_id.parquet'
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
 GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step (Total Effective Batch = 32)
 LOG_INTERVAL      = 10
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
-NUM_EPOCHS        = 2
+NUM_EPOCHS        = 5
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MAMoETrainState(train_state.TrainState):

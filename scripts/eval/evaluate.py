@@ -14,7 +14,10 @@ Metrik yang dihitung:
 Jalankan: python evaluate.py
 """
 
-import os, sys, json, re, time
+import os
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+, sys, json, re, time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional

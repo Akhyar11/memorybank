@@ -1,4 +1,7 @@
-import os, sys, json, time
+import os
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+, sys, json, time
 import numpy as np
 import jax
 import jax.numpy as jnp
