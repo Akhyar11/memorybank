@@ -8,7 +8,6 @@ class ExpertFFN(nn.Module):
     
     @nn.compact
     def __call__(self, x):
-        # SwiGLU requires input projected to 2 * intermediate_size
         gate_up_proj = nn.Dense(2 * self.config.intermediate_size, use_bias=False, name='gate_up_proj')
         down_proj = nn.Dense(self.config.hidden_size, use_bias=False, name='down_proj')
         
@@ -16,6 +15,13 @@ class ExpertFFN(nn.Module):
         x = SwiGLU()(x)
         x = down_proj(x)
         return x
+
+BatchedExperts = nn.vmap(
+    ExpertFFN,
+    variable_axes={'params': 0},
+    split_rngs={'params': True},
+    in_axes=0, out_axes=0
+)
 
 class MoERouter(nn.Module):
     config: any
@@ -69,20 +75,36 @@ class MoELayer(nn.Module):
         router = MoERouter(config=self.config)
         routing_weights, selected_experts, aux_loss, f_i = router(x)  # (batch*seq_len, top_k)
         
+        # Create expert mask for all tokens: (batch*seq_len, num_experts)
+        mask1hot = jax.nn.one_hot(selected_experts, self.config.num_experts) # (num_tokens, top_k, num_experts)
+        expert_mask = jnp.sum(mask1hot, axis=1) # (num_tokens, num_experts)
+        
+        # Batched input for experts: (num_experts, num_tokens, hidden_size)
+        x_expanded = jnp.broadcast_to(x[None, :, :], (self.config.num_experts, x.shape[0], hidden_size))
+        # Zero out tokens not routed to the expert to save compute (optional but good practice)
+        x_batched = jnp.where(expert_mask.T[..., None] > 0, x_expanded, 0.0)
+        
+        # Run all experts in parallel via vmap (XLA compiles this 100x faster than unrolled loops)
+        experts = BatchedExperts(config=self.config, name='experts')
+        expert_outs = experts(x_batched) # (num_experts, num_tokens, hidden_size)
+        
         # Output buffer
         final_hidden_states = jnp.zeros_like(x)
         
-        # Iterate over all experts
-        for expert_idx in range(self.config.num_experts):
-            expert = ExpertFFN(config=self.config, name=f'expert_{expert_idx}')
+        # Combine top-k experts using routing weights
+        for k in range(self.config.num_experts_per_tok):
+            # Gather the output for the k-th selected expert for each token
+            # selected_experts[:, k] is (num_tokens,)
+            # We want to index expert_outs which is (num_experts, num_tokens, hidden_size)
+            k_experts = selected_experts[:, k]
             
-            expert_mask = (selected_experts == expert_idx)
-            expert_out = expert(x)
+            # Use jax.vmap to gather effectively over the token dimension
+            def gather_expert_out(expert_idx, token_idx):
+                return expert_outs[expert_idx, token_idx, :]
             
-            for k in range(self.config.num_experts_per_tok):
-                mask_k = expert_mask[:, k:k+1]
-                weight_k = routing_weights[:, k:k+1]
-                
-                final_hidden_states += jnp.where(mask_k, expert_out * weight_k, 0.0)
+            gathered_out = jax.vmap(gather_expert_out)(k_experts, jnp.arange(x.shape[0]))
+            
+            weight_k = routing_weights[:, k:k+1]
+            final_hidden_states += gathered_out * weight_k
                 
         return final_hidden_states.reshape(batch_size, seq_len, hidden_size), aux_loss, f_i

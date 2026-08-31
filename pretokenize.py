@@ -20,6 +20,8 @@ LOCAL_CSV      = 'data/raw/vqfat_cosmopedia_id.csv'
 LOCAL_TOK      = 'tokenizer_hf/tokenizer.json'
 OUTPUT_PATH    = '/kaggle/working/vqfat_tokens.npy'
 OUTPUT_PATH_LO = 'data/pretrain/vqfat_tokens.npy'  # fallback lokal
+COLAB_CSV      = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_cosmopedia_id.csv'
+COLAB_OUT      = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_tokens.npy'
 # ─────────────────────────────────────────────────────────────────────────────
 
 def resolve_paths():
@@ -28,6 +30,8 @@ def resolve_paths():
     elif os.path.exists(LOCAL_CSV):
         os.makedirs('data/pretrain', exist_ok=True)
         return LOCAL_CSV, LOCAL_TOK, OUTPUT_PATH_LO
+    elif os.path.exists(COLAB_CSV):
+        return COLAB_CSV, LOCAL_TOK, COLAB_OUT
     else:
         print("❌ Dataset CSV tidak ditemukan!")
         sys.exit(1)

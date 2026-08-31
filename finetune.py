@@ -26,6 +26,8 @@ KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_PARQUET   = 'data/raw/t5gemma2_chat_multiturn.parquet'
 LOCAL_JSONL     = 'data/raw/memorybench_train_samples.jsonl'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
+COLAB_PARQUET   = '/content/drive/MyDrive/Colab Notebooks/dataset/t5gemma2_chat_multiturn.parquet'
+COLAB_JSONL     = '/content/drive/MyDrive/Colab Notebooks/dataset/memorybench_train_samples.jsonl'
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
@@ -197,12 +199,16 @@ def resolve_paths():
         tok = KAGGLE_TOK
     elif os.path.exists(LOCAL_PARQUET):
         paths.append(LOCAL_PARQUET)
+    elif os.path.exists(COLAB_PARQUET):
+        paths.append(COLAB_PARQUET)
         
     if os.path.exists(KAGGLE_JSONL):
         paths.append(KAGGLE_JSONL)
         tok = KAGGLE_TOK
     elif os.path.exists(LOCAL_JSONL):
         paths.append(LOCAL_JSONL)
+    elif os.path.exists(COLAB_JSONL):
+        paths.append(COLAB_JSONL)
         
     return paths, tok
 
@@ -216,6 +222,12 @@ def main():
     print(f"Effective batch: {total_batch_size * GRAD_ACCUM_STEPS} (Safe for 16GB VRAM)")
     print(f"Seq len        : {SEQ_LEN}")
     print()
+
+    # Colab TPU Initialization
+    if 'COLAB_TPU_ADDR' in os.environ:
+        import jax.tools.colab_tpu
+        jax.tools.colab_tpu.setup_tpu()
+        print("✅ Colab TPU initialized.")
 
     config = MAMoEConfig()
     model  = MAMoEForCausalLM(config=config)

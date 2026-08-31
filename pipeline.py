@@ -52,21 +52,25 @@ def check_kaggle_environment():
     t5gemma_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/t5gemma2_chat_multiturn.parquet'
     memorybench_path = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/memorybench_train_samples.jsonl'
     
+    colab_vqfat = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_cosmopedia_id.csv'
+    colab_t5gemma = '/content/drive/MyDrive/Colab Notebooks/dataset/t5gemma2_chat_multiturn.parquet'
+    colab_memorybench = '/content/drive/MyDrive/Colab Notebooks/dataset/memorybench_train_samples.jsonl'
+    
     # We now use the local HF tokenizer downloaded by fetch_embeddings.py
     tokenizer_path = 'tokenizer_hf/tokenizer.json'
     
-    if not os.path.exists(vqfat_path):
-        print(f"⚠️  WARNING: Pre-training dataset not found at {vqfat_path}")
+    if not os.path.exists(vqfat_path) and not os.path.exists(colab_vqfat) and not os.path.exists('data/raw/vqfat_cosmopedia_id.csv'):
+        print(f"⚠️  WARNING: Pre-training dataset not found at {vqfat_path} or Colab/local path")
     else:
         print("✅ Phase 1 Dataset Found (VQFat CSV)")
         
-    if not os.path.exists(t5gemma_path):
-        print(f"⚠️  WARNING: Fine-Tuning dataset not found at {t5gemma_path}")
+    if not os.path.exists(t5gemma_path) and not os.path.exists(colab_t5gemma) and not os.path.exists('data/raw/t5gemma2_chat_multiturn.parquet'):
+        print(f"⚠️  WARNING: Fine-Tuning dataset not found at {t5gemma_path} or Colab/local path")
     else:
         print("✅ Phase 2 Dataset Found (T5Gemma2 Parquet)")
 
-    if not os.path.exists(memorybench_path):
-        print(f"⚠️  WARNING: MemoryBench dataset not found at {memorybench_path}")
+    if not os.path.exists(memorybench_path) and not os.path.exists(colab_memorybench) and not os.path.exists('data/raw/memorybench_train_samples.jsonl'):
+        print(f"⚠️  WARNING: MemoryBench dataset not found at {memorybench_path} or Colab/local path")
     else:
         print("✅ Phase 2 Dataset Found (MemoryBench JSONL)")
         

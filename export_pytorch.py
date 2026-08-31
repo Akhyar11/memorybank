@@ -57,20 +57,29 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
         state_dict[f'{pt_prefix}.moe.router.weight'] = to_torch(moe['MoERouter_0']['gate_proj']['kernel'], True)
         
         for j in range(config.num_experts):
-            expert = moe[f'expert_{j}']
-            state_dict[f'{pt_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(expert['gate_up_proj']['kernel'], True)
-            state_dict[f'{pt_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(expert['down_proj']['kernel'], True)
+            state_dict[f'{pt_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(moe['experts']['gate_up_proj']['kernel'][j], True)
+            state_dict[f'{pt_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(moe['experts']['down_proj']['kernel'][j], True)
 
     # Load into PyTorch model to verify compatibility
     pt_model.load_state_dict(state_dict, strict=False)
     return state_dict
 
 def main():
-    ckpt_dir = '/kaggle/working/checkpoints/phase2'
-    if not os.path.exists(ckpt_dir):
-        ckpt_dir = '/kaggle/working/checkpoints/phase1'
-        
-    if not os.path.exists(ckpt_dir):
+    # Coba cari di Kaggle, lalu local/Colab
+    paths_to_check = [
+        '/kaggle/working/checkpoints/phase2',
+        '/kaggle/working/checkpoints/phase1',
+        'checkpoints/phase2',
+        'checkpoints/phase1'
+    ]
+    
+    ckpt_dir = None
+    for p in paths_to_check:
+        if os.path.exists(p):
+            ckpt_dir = p
+            break
+            
+    if not ckpt_dir:
         print("❌ No JAX checkpoint found to export!")
         return
 
@@ -90,7 +99,7 @@ def main():
     print("Converting and transposing weights...")
     state_dict = convert_jax_to_pytorch(jax_params, pt_model, config)
     
-    output_path = '/kaggle/working/pytorch_model.pt'
+    output_path = '/kaggle/working/pytorch_model.pt' if os.path.exists('/kaggle') else 'pytorch_model.pt'
     print(f"Saving PyTorch state_dict to {output_path}...")
     torch.save(state_dict, output_path)
     

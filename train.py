@@ -28,6 +28,7 @@ KAGGLE_TOK      = 'tokenizer_hf/tokenizer.json'
 LOCAL_TOKENS    = 'data/pretrain/vqfat_tokens.npy'
 LOCAL_CSV       = 'data/raw/vqfat_cosmopedia_id.csv'
 LOCAL_TOK       = 'tokenizer_hf/tokenizer.json'
+COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_cosmopedia_id.csv'
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
@@ -147,6 +148,9 @@ def resolve_data_paths():
     if os.path.exists(LOCAL_CSV):
         print(f"⚠️  npy tidak ditemukan, streaming CSV → {LOCAL_CSV}")
         return 'csv', LOCAL_CSV, LOCAL_TOK
+    if os.path.exists(COLAB_CSV):
+        print(f"⚠️  npy tidak ditemukan, streaming CSV → {COLAB_CSV}")
+        return 'csv', COLAB_CSV, LOCAL_TOK
     raise FileNotFoundError("Tidak ada dataset ditemukan!")
 
 def npy_epoch_generator(npy_path, total_batch_size, seq_len):
@@ -214,6 +218,12 @@ def main():
     print(f"Effective batch: {total_batch_size * GRAD_ACCUM_STEPS} (Safe for 16GB VRAM)")
     print(f"Seq len        : {SEQ_LEN}")
     print()
+
+    # Colab TPU Initialization
+    if 'COLAB_TPU_ADDR' in os.environ:
+        import jax.tools.colab_tpu
+        jax.tools.colab_tpu.setup_tpu()
+        print("✅ Colab TPU initialized.")
 
     config = MAMoEConfig()
     model  = MAMoEForCausalLM(config=config)
