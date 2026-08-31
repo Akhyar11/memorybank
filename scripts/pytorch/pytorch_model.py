@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from pytorch_memory import MemoryBank
+from scripts.pytorch.pytorch_memory import MemoryBank
 
 class MAMoEConfig:
     def __init__(self, **kwargs):
