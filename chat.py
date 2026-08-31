@@ -56,6 +56,9 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0
             logits = model(input_tensor)
             next_token_logits = logits[0, -1, :]
             
+            # CEGAH MODEL MEMPREDIKSI TOKEN 0 (PAD)
+            next_token_logits[0] = float('-inf')
+            
             if temperature == 0.0:
                 next_token = torch.argmax(next_token_logits).item()
             else:
