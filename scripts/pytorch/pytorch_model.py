@@ -17,8 +17,8 @@ class MAMoEConfig:
         self.num_attention_heads = kwargs.get('num_attention_heads', 4)
         self.head_dim = kwargs.get('head_dim', 64)
         self.intermediate_size = kwargs.get('intermediate_size', 512)
-        self.num_experts = kwargs.get('num_experts', 16)
-        self.num_experts_per_tok = kwargs.get('num_experts_per_tok', 1)
+        self.num_experts = kwargs.get('num_experts', 64)
+        self.num_experts_per_tok = kwargs.get('num_experts_per_tok', 4)
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 2048)
         self.rms_norm_eps = kwargs.get('rms_norm_eps', 1e-6)
         self.rope_theta = kwargs.get('rope_theta', 10000.0)
@@ -162,21 +162,31 @@ class Expert(nn.Module):
 class MoELayer(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.router = nn.Linear(config.hidden_size, config.num_experts, bias=False)
         self.experts = nn.ModuleList([Expert(config) for _ in range(config.num_experts)])
 
     def forward(self, x):
         logits = self.router(x)
         probs = F.softmax(logits, dim=-1)
-        top_k_probs, top_k_indices = torch.topk(probs, 1, dim=-1)
+        top_k = self.config.num_experts_per_tok
+        top_k_probs, top_k_indices = torch.topk(probs, top_k, dim=-1)
         
+        if top_k > 1:
+            top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-8)
+            
         output = torch.zeros_like(x)
-        for i, expert in enumerate(self.experts):
-            mask = (top_k_indices == i).float()
-            if mask.sum() > 0:
-                expert_out = expert(x)
-                output += (expert_out * mask)
-                
+        
+        for k in range(top_k):
+            indices_k = top_k_indices[..., k]
+            probs_k = top_k_probs[..., k].unsqueeze(-1)
+            
+            for i, expert in enumerate(self.experts):
+                mask = (indices_k == i).float().unsqueeze(-1)
+                if mask.sum() > 0:
+                    expert_out = expert(x)
+                    output += expert_out * mask * probs_k
+                    
         return output
 
 class MemoryController(nn.Module):

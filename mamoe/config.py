@@ -10,8 +10,8 @@ class MAMoEConfig:
     num_attention_heads: int = 4    # Heads = 4 (64 dim)
     head_dim: int = 64
     intermediate_size: int = 512    # d_ff = 512
-    num_experts: int = 16           # E = 16
-    num_experts_per_tok: int = 1    # Top-1 routing
+    num_experts: int = 64           # E = 64
+    num_experts_per_tok: int = 4    # Top-4 routing
     max_position_embeddings: int = 2048
     rms_norm_eps: float = 1e-6
     rope_theta: float = 10000.0
