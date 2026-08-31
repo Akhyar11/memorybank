@@ -71,8 +71,9 @@ def create_train_state(rng, model, dummy_input):
     return MAMoETrainState.create(apply_fn=model.apply, params=params, tx=tx), memory_state
 
 @functools.partial(jax.pmap, axis_name='batch')
-def finetune_step(state, memory_state, batch_inputs):
+def finetune_step(state, memory_state, batch_inputs, batch_masks):
     labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
+    target_masks = jnp.roll(batch_masks, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
         (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
@@ -81,7 +82,8 @@ def finetune_step(state, memory_state, batch_inputs):
         vocab_size = logits.shape[-1]
         log_probs  = jax.nn.log_softmax(logits, axis=-1)
         ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-        loss_mask  = (labels != 0).astype(jnp.float32)
+        # Combine target_masks with non-zero padding check
+        loss_mask  = target_masks * (labels != 0).astype(jnp.float32)
         mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
         return mean_ce + 0.01 * aux_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
 
@@ -95,15 +97,18 @@ def finetune_step(state, memory_state, batch_inputs):
     return state, new_mem, {'ce_loss': ce_loss, 'aux_loss': aux_loss, 'expert_load': avg_f_i}
 
 @functools.partial(jax.pmap, axis_name='batch')
-def eval_step(state, memory_state, batch_inputs):
+def eval_step(state, memory_state, batch_inputs, batch_masks):
     labels = jnp.roll(batch_inputs, shift=-1, axis=1).at[:, -1].set(0)
+    target_masks = jnp.roll(batch_masks, shift=-1, axis=1).at[:, -1].set(0)
+    
     (logits, _, _, aux_loss, _), mutated = state.apply_fn(
         {'params': state.params, 'memory': memory_state}, batch_inputs, mutable=['memory'],
     )
     vocab_size = logits.shape[-1]
     log_probs  = jax.nn.log_softmax(logits, axis=-1)
     ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-    loss_mask  = (labels != 0).astype(jnp.float32)
+    # Validation hanya dihitung di target mask (Ground Truth)
+    loss_mask  = target_masks * (labels != 0).astype(jnp.float32)
     mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
     
     ce_loss  = jax.lax.pmean(mean_ce, axis_name='batch')
@@ -111,42 +116,73 @@ def eval_step(state, memory_state, batch_inputs):
     return mutated.get('memory', {}), {'ce_loss': ce_loss, 'aux_loss': aux_loss}
 
 def load_data(path):
-    texts = []
+    samples = []
     print(f"Loading {path} into memory...")
     with open(path, 'r', encoding='utf-8') as f:
         for line in f:
             if not line.strip(): continue
             row = json.loads(line)
-            text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in row), list(row.keys())[0])
-            val = row.get(text_col)
-            if val is None and row: val = list(row.values())[0]
-            if isinstance(val, list):
-                try: val = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', msg.get('text', ''))}" for msg in val if isinstance(msg, dict)])
-                except: val = str(val)
-            texts.append(str(val))
-    
+            
+            # Format MemoryBench
+            if "conversation" in row and "query" in row and "answer" in row:
+                conv = row["conversation"]
+                conv_text = "\\n".join([f"{msg.get('role', 'user')}: {msg.get('text', '')}" for msg in conv])
+                prompt = f"{conv_text}\\nuser: {row['query']}\\nassistant:"
+                answer = " " + str(row["answer"])
+                samples.append((prompt, answer))
+            else:
+                # Fallback format umum
+                text_col = next((c for c in ["messages", "text", "conversation", "prompt", "output", "content"] if c in row), list(row.keys())[0])
+                val = row.get(text_col)
+                if val is None and row: val = list(row.values())[0]
+                if isinstance(val, list):
+                    try: val = "\\n".join([f"{msg.get('role', 'user')}: {msg.get('content', msg.get('text', ''))}" for msg in val if isinstance(msg, dict)])
+                    except: val = str(val)
+                # Split jadi prompt & dummy answer (full mask)
+                samples.append(("", str(val)))
+                
     random.seed(42)
-    random.shuffle(texts)
-    split_idx = int(0.9 * len(texts))
-    return texts[:split_idx], texts[split_idx:]
+    random.shuffle(samples)
+    split_idx = int(0.9 * len(samples))
+    return samples[:split_idx], samples[split_idx:]
 
-def conversation_generator(texts, tok_path, total_batch_size, seq_len):
+def conversation_generator(samples, tok_path, total_batch_size, seq_len):
     from tokenizers import Tokenizer
     tokenizer = Tokenizer.from_file(tok_path)
-    buffer = []
+    buffer_ids = []
+    buffer_masks = []
     
-    for content in texts:
-        tokens = tokenizer.encode(content).ids
-        buffer.append(tokens)
-        if len(buffer) == total_batch_size:
-            max_len = max(len(ids) for ids in buffer)
+    for prompt, answer in samples:
+        prompt_tokens = tokenizer.encode(prompt).ids if prompt else []
+        answer_tokens = tokenizer.encode(answer).ids
+        total_tokens = prompt_tokens + answer_tokens
+        mask = [0] * len(prompt_tokens) + [1] * len(answer_tokens)
+        
+        # Truncate left if too long
+        if len(total_tokens) > seq_len:
+            total_tokens = total_tokens[-seq_len:]
+            mask = mask[-seq_len:]
+            
+        buffer_ids.append(total_tokens)
+        buffer_masks.append(mask)
+        
+        if len(buffer_ids) == total_batch_size:
+            max_len = max(len(ids) for ids in buffer_ids)
             padded_len = ((max_len + seq_len - 1) // seq_len) * seq_len
-            padded = np.zeros((total_batch_size, padded_len), dtype=np.int32)
-            for i, ids in enumerate(buffer): padded[i, :len(ids)] = ids
+            if padded_len == 0: padded_len = seq_len
+            
+            padded_ids = np.zeros((total_batch_size, padded_len), dtype=np.int32)
+            padded_masks = np.zeros((total_batch_size, padded_len), dtype=np.int32)
+            
+            for i, (ids, m) in enumerate(zip(buffer_ids, buffer_masks)):
+                padded_ids[i, :len(ids)] = ids
+                padded_masks[i, :len(m)] = m
+                
             for chunk_start in range(0, padded_len, seq_len):
-                yield padded[:, chunk_start : chunk_start + seq_len], False
-            yield None, True
-            buffer = []
+                yield padded_ids[:, chunk_start : chunk_start + seq_len], padded_masks[:, chunk_start : chunk_start + seq_len], False
+            yield None, None, True
+            buffer_ids = []
+            buffer_masks = []
 
 def resolve_paths():
     tok = LOCAL_TOK
@@ -197,14 +233,15 @@ def main():
         train_loader = conversation_generator(train_texts, tok_path, total_batch_size, SEQ_LEN)
         step = 0
         last_log = time.time()
-        for batch, should_reset in train_loader:
+        for batch, mask, should_reset in train_loader:
             if should_reset:
                 memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), memory_state)
                 continue
             
             step += 1
-            sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            state, memory_state, metrics = finetune_step(state, memory_state, sharded)
+            sharded_inputs = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            sharded_masks = mask.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            state, memory_state, metrics = finetune_step(state, memory_state, sharded_inputs, sharded_masks)
             
             if step % LOG_INTERVAL == 0:
                 ce = float(unreplicate(metrics['ce_loss']))
@@ -215,12 +252,13 @@ def main():
         print(f"\nRunning Validation...")
         val_loader = conversation_generator(val_texts, tok_path, total_batch_size, SEQ_LEN)
         val_ce, val_steps = 0.0, 0
-        for batch, should_reset in val_loader:
+        for batch, mask, should_reset in val_loader:
             if should_reset:
                 val_memory_state = jax.tree_util.tree_map(lambda x: jnp.zeros_like(x), val_memory_state)
                 continue
-            sharded = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
-            val_memory_state, metrics = eval_step(state, val_memory_state, sharded)
+            sharded_inputs = batch.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            sharded_masks = mask.reshape((num_devices, LOCAL_BATCH_SIZE, SEQ_LEN))
+            val_memory_state, metrics = eval_step(state, val_memory_state, sharded_inputs, sharded_masks)
             val_ce += float(unreplicate(metrics['ce_loss']))
             val_steps += 1
             
