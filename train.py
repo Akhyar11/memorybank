@@ -5,7 +5,6 @@ import time
 
 import threading
 import queue
-import re
 import torch
 import jax
 import jax.numpy as jnp
@@ -179,18 +178,8 @@ def csv_epoch_generator(csv_path, tok_path, total_batch_size, seq_len):
                       if c in chunk.columns), chunk.columns[0])
         texts = chunk[col].dropna().astype(str).tolist()
         
-        # --- PEMBERSIHAN DATASET DENGAN REGEX ---
-        cleaned_texts = []
-        for text in texts:
-            # 1. Hapus spasi di awal
-            text = text.lstrip()
-            # 2. Hapus yang bukan abjad, angka, atau simbol tertentu (, . - + = < > * /)
-            text = re.sub(r'[^a-zA-Z0-9\s,\.\-\+\=\<\>\*\/]', '', text)
-            cleaned_texts.append(text)
-        # ----------------------------------------
-        
         ids   = []
-        for enc in tokenizer.encode_batch(cleaned_texts):
+        for enc in tokenizer.encode_batch(texts):
             ids.extend(enc.ids)
         n   = len(ids) // seq_len
         arr = np.array(ids[:n * seq_len], dtype=np.uint16).reshape(n, seq_len)
