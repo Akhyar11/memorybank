@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+from pytorch_memory import MemoryBank
+
 class MAMoEConfig:
     def __init__(self, **kwargs):
         self.vocab_size = kwargs.get('vocab_size', 31923)
@@ -138,8 +140,9 @@ class MAMoEForCausalLM(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.rope = RoPE(config.head_dim, config.rope_theta)
         self.memory_controller = MemoryController(config)
+        self.memory_bank = MemoryBank(config)
 
-    def forward(self, input_ids):
+    def forward(self, input_ids, mem_state=None, is_eos=False):
         bsz, seq_len = input_ids.shape
         x = self.embed_tokens(input_ids)
         x = self.embed_proj(x)
@@ -151,6 +154,23 @@ class MAMoEForCausalLM(nn.Module):
             x = layer(x, cos, sin)
             
         x = self.norm(x)
+        
+        write_prob_val = None
+        if mem_state is not None:
+            read_prob, write_prob = self.memory_controller(x)
+            memory_output, mem_state = self.memory_bank.read(x, mem_state)
+            x = x + read_prob * memory_output
+            
+            if is_eos:
+                # Use the last token for write operation
+                h_eos = x[:, -1, :]
+                w_prob = write_prob[:, -1, :]
+                mem_state = self.memory_bank.write(h_eos, w_prob, mem_state)
+                write_prob_val = w_prob
+                
         x_proj = self.lm_head_proj(x)
         logits = torch.matmul(x_proj, self.embed_tokens.weight.T)
+        
+        if mem_state is not None:
+            return logits, mem_state, write_prob_val
         return logits

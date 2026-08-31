@@ -27,6 +27,14 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
     state_dict['memory_controller.read_gate.bias'] = to_torch(jax_params['memory_controller']['read_gate']['bias'])
     state_dict['memory_controller.write_gate.weight'] = to_torch(jax_params['memory_controller']['write_gate']['kernel'], True)
     state_dict['memory_controller.write_gate.bias'] = to_torch(jax_params['memory_controller']['write_gate']['bias'])
+    
+    # 2.5 Memory Bank
+    state_dict['memory_bank.q_proj.weight'] = to_torch(jax_params['memory_bank']['q_proj']['kernel'], True)
+    state_dict['memory_bank.k_proj.weight'] = to_torch(jax_params['memory_bank']['k_proj']['kernel'], True)
+    state_dict['memory_bank.v_proj.weight'] = to_torch(jax_params['memory_bank']['v_proj']['kernel'], True)
+    state_dict['memory_bank.i_proj.weight'] = to_torch(jax_params['memory_bank']['importance_proj']['kernel'], True)
+    state_dict['memory_bank.i_proj.bias'] = to_torch(jax_params['memory_bank']['importance_proj']['bias'])
+    state_dict['memory_bank.fusion_proj.weight'] = to_torch(jax_params['memory_bank']['fusion_proj']['kernel'], True)
 
     # 3. Layers
     for i in range(config.num_hidden_layers):

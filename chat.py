@@ -1,59 +1,34 @@
 import os
-import sys
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 import torch.nn.functional as F
 from tokenizers import Tokenizer
 from pytorch_model import MAMoEForCausalLM, MAMoEConfig
 
-def load_model_and_tokenizer(model_path='pytorch_model.pt', tok_path='tokenizer_hf/tokenizer.json'):
-    print("Memuat tokenizer...")
-    if not os.path.exists(tok_path):
-        print(f"❌ Tokenizer tidak ditemukan di {tok_path}")
-        sys.exit(1)
-    tokenizer = Tokenizer.from_file(tok_path)
-
-    print("Memuat arsitektur model...")
-    config = MAMoEConfig()
-    model = MAMoEForCausalLM(config)
-    
-    print(f"Memuat bobot model dari {model_path}...")
-    if not os.path.exists(model_path):
-        print(f"❌ Model PyTorch tidak ditemukan di {model_path}.")
-        print("Silakan jalankan 'export_pytorch.py' di Kaggle dan unduh file 'pytorch_model.pt' ke folder ini.")
-        sys.exit(1)
-        
-    state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
-    model.load_state_dict(state_dict, strict=False)
-    
-    # Deteksi perangkat (GPU jika ada, jika tidak pakai CPU)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Menggunakan perangkat: {device}")
-    model.to(device)
-    model.eval()
-    
-    return model, tokenizer, device
-
 import time
 
-def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9):
-    # Dapatkan ID untuk token pemisah/akhir (tergantung dataset, biasanya [SEP] atau <|im_end|>)
+def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9, mem_state=None):
+    model.eval()
+    
     eos_token_id = tokenizer.token_to_id("[SEP]") 
     if eos_token_id is None:
         eos_token_id = tokenizer.token_to_id("<|im_end|>")
         
     input_ids = tokenizer.encode(prompt).ids
     input_tensor = torch.tensor([input_ids], dtype=torch.long).to(device)
-    generated = input_ids.copy()
     
     print("\nAI: ", end="", flush=True)
-    
     start_time = time.time()
     num_generated = 0
     
     with torch.no_grad():
-        for _ in range(max_new_tokens):
+        for i in range(max_new_tokens):
+            # Write memory ONLY on the very last token generated in this turn
+            is_eos = (i == max_new_tokens - 1)
+            
             # Forward pass
-            logits = model(input_tensor)
+            logits, mem_state, write_prob = model(input_tensor, mem_state=mem_state, is_eos=is_eos)
             next_token_logits = logits[0, -1, :]
             
             # CEGAH MODEL MEMPREDIKSI TOKEN 0 (PAD)
@@ -79,58 +54,71 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0
                 probs = F.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1).item()
             
-            num_generated += 1
-            
-            # Jika memprediksi End-of-Sequence, berhenti
             if next_token == eos_token_id:
+                # Force memory write before exiting early
+                _, mem_state, write_prob = model(input_tensor, mem_state=mem_state, is_eos=True)
                 break
                 
-            generated.append(next_token)
-            input_tensor = torch.tensor([generated], dtype=torch.long).to(device)
+            token_str = tokenizer.decode([next_token])
+            print(token_str, end=" ", flush=True)
             
-            # Decode token terbaru saja dan print secara streaming
-            # Catatan: WordPiece kadang memunculkan tanda '##', kita hapus untuk tampilan rapi
-            new_word = tokenizer.decode([next_token])
-            if new_word.startswith("##"):
-                new_word = new_word[2:]
-            elif len(generated) > len(input_ids) + 1:
-                new_word = " " + new_word
+            input_tensor = torch.cat([input_tensor, torch.tensor([[next_token]], device=device)], dim=1)
+            num_generated += 1
+            
+            # Print Memory Write Event if prob > 0.5
+            if write_prob is not None and write_prob[0].item() > 0.5:
+                print(f"\n\033[92m[💾 AI menyimpan interaksi ini ke Memory Bank!]\033[0m")
                 
-            print(new_word, end="", flush=True)
-            
     end_time = time.time()
     elapsed = end_time - start_time
     tok_per_sec = num_generated / elapsed if elapsed > 0 else 0
-    
-    print(f"\n\n[⏱️ Kecepatan: {tok_per_sec:.2f} tok/detik | Total: {num_generated} token]")
+    print(f"\n\n[⏱️ Kecepatan: {tok_per_sec:.2f} tok/detik | Total: {num_generated} token]\n")
+    return mem_state
 
 def main():
-    print("🚀 Inisialisasi Memory Bank - Local Chat Mode\n")
-    model, tokenizer, device = load_model_and_tokenizer()
+    print("Loading tokenizer & PyTorch Model...")
+    tok_path = 'tokenizer_hf/tokenizer.json'
+    model_path = 'pytorch_model.pt'
     
-    print("\nSiap! Ketik 'keluar' atau 'exit' untuk berhenti.")
-    print("-" * 50)
+    tokenizer = Tokenizer.from_file(tok_path)
+    config = MAMoEConfig()
+    model = MAMoEForCausalLM(config)
     
-    # Riwayat percakapan sederhana
-    chat_history = ""
+    if not os.path.exists(model_path):
+        print(f"Error: {model_path} tidak ditemukan. Harap jalankan export_pytorch.py di Kaggle dan unduh hasilnya.")
+        return
+        
+    state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
+    model.load_state_dict(state_dict, strict=False)
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Menggunakan perangkat: {device}")
+    model.to(device)
+    
+    print("\n✅ Siap! Ketik 'quit' atau 'exit' untuk keluar.\n")
+    
+    # Initialize Memory State!
+    mem_state = model.memory_bank.init_state(bsz=1, device=device)
     
     while True:
         try:
-            user_input = input("\nAnda: ")
-            if user_input.strip().lower() in ['keluar', 'exit', 'quit']:
+            user_input = input("Anda: ")
+            if user_input.lower() in ['quit', 'exit']:
                 break
-            if user_input.strip() == "":
-                continue
                 
-            # Bentuk format prompt percakapan (Sesuaikan dengan format di t5gemma2)
-            # Biasanya bentuknya seperti: "User: Halo\nAssistant:"
-            prompt = f"{chat_history}User: {user_input}\nAssistant:"
+            prompt = f"User: {user_input}\nAssistant:"
             
-            generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0.7)
-            
-            # Simpan sejarah singkat agar ada konteks multi-turn
-            # (Kita batasi agar tidak OOM di GPU MX350)
-            chat_history = prompt # Simpan konteks terakhir saja (atau bisa diakumulasi jika mau)
+            # PENTING: Pass mem_state and receive updated mem_state
+            mem_state = generate(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                prompt=prompt,
+                max_new_tokens=150,
+                temperature=0.7,
+                top_p=0.9,
+                mem_state=mem_state
+            )
             
         except KeyboardInterrupt:
             print("\nSampai jumpa!")
