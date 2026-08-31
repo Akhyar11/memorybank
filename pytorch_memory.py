@@ -44,15 +44,15 @@ class MemoryBank(nn.Module):
         last_access = mem_state['last_access']
         state = mem_state['state']
         
-        bsz, seq_len, dim = h_eos.shape
+        bsz, dim = h_eos.shape
         
-        q = self.q_proj(h_eos)
+        q = self.q_proj(h_eos) # (bsz, dim)
         
         q_norm = F.normalize(q, p=2, dim=-1, eps=1e-8)
         k_norm = F.normalize(keys, p=2, dim=-1, eps=1e-8)
         
-        # (bsz, seq_len, dim) @ (bsz, dim, capacity) -> (bsz, seq_len, capacity)
-        sim = torch.bmm(q_norm, k_norm.transpose(1, 2))
+        # (bsz, 1, dim) @ (bsz, dim, capacity) -> (bsz, 1, capacity)
+        sim = torch.bmm(q_norm.unsqueeze(1), k_norm.transpose(1, 2)).squeeze(1) # (bsz, capacity)
         
         dt = (step.unsqueeze(-1) - last_access).clamp(min=0).float()
         lam = getattr(self.config, 'mem_decay_rate', 0.001)
@@ -63,13 +63,13 @@ class MemoryBank(nn.Module):
         gamma = getattr(self.config, 'mem_gamma', 0.1)
         delta = getattr(self.config, 'mem_delta', 0.1)
         
-        # Broadcast metadata to (bsz, 1, capacity)
+        # Broadcast metadata
         score = (alpha * sim + 
-                 beta * importance.unsqueeze(1) + 
-                 gamma * recency.unsqueeze(1) + 
-                 delta * confidence.unsqueeze(1))
+                 beta * importance + 
+                 gamma * recency + 
+                 delta * confidence)
                  
-        mask = (state != STATE_EXPIRED).unsqueeze(1)
+        mask = (state != STATE_EXPIRED)
         score = score.masked_fill(~mask, -1e9)
         
         k = self.config.memory_top_k
@@ -82,12 +82,11 @@ class MemoryBank(nn.Module):
         attn_weights = F.softmax(filtered_scores, dim=-1)
         attn_weights = attn_weights * valid_mask.float()
         
-        # Gather top-k values: (bsz, seq_len, k, dim)
-        expanded_indices = topk_indices.unsqueeze(-1).expand(-1, -1, -1, dim)
-        expanded_vals = vals.unsqueeze(1).expand(-1, seq_len, -1, -1)
-        topk_vals = torch.gather(expanded_vals, 2, expanded_indices)
+        # Gather top-k values: (bsz, k, dim)
+        expanded_indices = topk_indices.unsqueeze(-1).expand(-1, -1, dim)
+        topk_vals = torch.gather(vals, 1, expanded_indices)
         
-        read_result = torch.sum(attn_weights.unsqueeze(-1) * topk_vals, dim=2)
+        read_result = torch.sum(attn_weights.unsqueeze(-1) * topk_vals, dim=1)
         
         # Access Reinforcement
         for b in range(bsz):

@@ -53,6 +53,36 @@ class RoPE(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         return torch.cos(emb), torch.sin(emb)
 
+class SelfAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.num_heads = config.num_attention_heads
+        self.head_dim = config.head_dim
+        self.hidden_size = config.hidden_size
+        
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+
+    def forward(self, x, cos, sin):
+        bsz, seq_len, _ = x.shape
+        q, k, v = self.q_proj(x), self.k_proj(x), self.v_proj(x)
+        
+        q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Apply RoPE
+        q = (q * cos) + (torch.cat([-q[..., self.head_dim//2:], q[..., :self.head_dim//2]], dim=-1) * sin)
+        k = (k * cos) + (torch.cat([-k[..., self.head_dim//2:], k[..., :self.head_dim//2]], dim=-1) * sin)
+
+        attn_weights = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        
+        o = torch.matmul(attn_weights, v).transpose(1, 2).contiguous().view(bsz, seq_len, -1)
+        return self.o_proj(o)
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -85,6 +115,36 @@ class CausalSelfAttention(nn.Module):
         o = torch.matmul(attn_weights, v).transpose(1, 2).contiguous().view(bsz, seq_len, -1)
         return self.o_proj(o)
 
+class CrossAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.num_heads = config.num_attention_heads
+        self.head_dim = config.head_dim
+        self.hidden_size = config.hidden_size
+        
+        self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+
+    def forward(self, x, context):
+        bsz, q_len, _ = x.shape
+        _, kv_len, _ = context.shape
+        
+        q = self.q_proj(x)
+        k = self.k_proj(context)
+        v = self.v_proj(context)
+        
+        q = q.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(bsz, kv_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(bsz, kv_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        attn_weights = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        
+        o = torch.matmul(attn_weights, v).transpose(1, 2).contiguous().view(bsz, q_len, -1)
+        return self.o_proj(o)
+
 class Expert(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -103,13 +163,11 @@ class MoELayer(nn.Module):
         self.experts = nn.ModuleList([Expert(config) for _ in range(config.num_experts)])
 
     def forward(self, x):
-        # Simplistic MoE routing for PyTorch load testing
         logits = self.router(x)
         probs = F.softmax(logits, dim=-1)
         top_k_probs, top_k_indices = torch.topk(probs, 1, dim=-1)
         
         output = torch.zeros_like(x)
-        # Inefficient loop just for structural compatibility
         for i, expert in enumerate(self.experts):
             mask = (top_k_indices == i).float()
             if mask.sum() > 0:
@@ -127,11 +185,11 @@ class MemoryController(nn.Module):
     def forward(self, x):
         return torch.sigmoid(self.read_gate(x)), torch.sigmoid(self.write_gate(x))
 
-class MAMoEBlock(nn.Module):
+class MAMoEEncoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
-        self.self_attn = CausalSelfAttention(config)
+        self.self_attn = SelfAttention(config)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.moe = MoELayer(config)
 
@@ -140,46 +198,102 @@ class MAMoEBlock(nn.Module):
         h = h + self.moe(self.post_attention_layernorm(h))
         return h
 
-class MAMoEForCausalLM(nn.Module):
+class MAMoEDecoderBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.self_attn = CausalSelfAttention(config)
+        self.cross_attn_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.cross_attn = CrossAttention(config)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.moe = MoELayer(config)
+
+    def forward(self, x, context, cos, sin):
+        h = x + self.self_attn(self.input_layernorm(x), cos, sin)
+        h = h + self.cross_attn(self.cross_attn_layernorm(h), context)
+        h = h + self.moe(self.post_attention_layernorm(h))
+        return h
+
+class MAMoEEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList([MAMoEEncoderBlock(config) for _ in range(config.num_hidden_layers)])
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        
+    def forward(self, x, cos, sin):
+        for layer in self.layers:
+            x = layer(x, cos, sin)
+        return self.norm(x)
+        
+class MAMoEDecoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList([MAMoEDecoderBlock(config) for _ in range(config.num_hidden_layers)])
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        
+    def forward(self, x, context, cos, sin):
+        for layer in self.layers:
+            x = layer(x, context, cos, sin)
+        return self.norm(x)
+
+class MAMoEForConditionalGeneration(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.embed_tokens = nn.Embedding(config.vocab_size, config.embed_dim)
         self.embed_proj = nn.Linear(config.embed_dim, config.hidden_size)
         self.lm_head_proj = nn.Linear(config.hidden_size, config.embed_dim)
-        self.layers = nn.ModuleList([MAMoEBlock(config) for _ in range(config.num_hidden_layers)])
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        
+        self.encoder = MAMoEEncoder(config)
+        self.decoder = MAMoEDecoder(config)
         self.rope = RoPE(config.head_dim, config.rope_theta)
+        
         self.memory_controller = MemoryController(config)
         self.memory_bank = MemoryBank(config)
 
-    def forward(self, input_ids, mem_state=None, is_eos=False):
-        bsz, seq_len = input_ids.shape
-        x = self.embed_tokens(input_ids)
-        x = self.embed_proj(x)
-        cos, sin = self.rope(seq_len)
-        cos = cos.view(1, 1, seq_len, -1)
-        sin = sin.view(1, 1, seq_len, -1)
+    def forward(self, input_ids, decoder_input_ids, mem_state=None, is_eos=False):
+        # 1. Encoder Pass
+        bsz, enc_seq_len = input_ids.shape
+        x_enc = self.embed_proj(self.embed_tokens(input_ids))
+        cos_enc, sin_enc = self.rope(enc_seq_len)
+        cos_enc = cos_enc.view(1, 1, enc_seq_len, -1)
+        sin_enc = sin_enc.view(1, 1, enc_seq_len, -1)
         
-        for layer in self.layers:
-            x = layer(x, cos, sin)
-            
-        x = self.norm(x)
+        encoder_hidden_states = self.encoder(x_enc, cos_enc, sin_enc)
+        
+        # 2. Memory READ Phase
+        h_prompt_eos = encoder_hidden_states[:, -1, :]
+        read_prob, write_prob = self.memory_controller(h_prompt_eos)
         
         write_prob_val = None
         if mem_state is not None:
-            read_prob, write_prob = self.memory_controller(x)
-            memory_output, mem_state = self.memory_bank.read(x, mem_state)
-            x = x + read_prob * memory_output
+            memory_output, mem_state = self.memory_bank.read(h_prompt_eos, mem_state)
+            fused_memory_context = memory_output * read_prob
             
-            if is_eos:
-                # Use the last token for write operation
-                h_eos = x[:, -1, :]
-                w_prob = write_prob[:, -1, :]
-                mem_state = self.memory_bank.write(h_eos, w_prob, mem_state)
-                write_prob_val = w_prob
+            fused_memory_context = fused_memory_context.unsqueeze(1) # (bsz, 1, hidden)
+            full_context_states = torch.cat([fused_memory_context, encoder_hidden_states], dim=1)
+        else:
+            full_context_states = encoder_hidden_states
+            
+        # 3. Decoder Pass
+        bsz, dec_seq_len = decoder_input_ids.shape
+        x_dec = self.embed_proj(self.embed_tokens(decoder_input_ids))
+        cos_dec, sin_dec = self.rope(dec_seq_len)
+        cos_dec = cos_dec.view(1, 1, dec_seq_len, -1)
+        sin_dec = sin_dec.view(1, 1, dec_seq_len, -1)
+        
+        decoder_hidden_states = self.decoder(x_dec, full_context_states, cos_dec, sin_dec)
+        
+        # 4. Memory WRITE Phase
+        if mem_state is not None and is_eos:
+            h_decoder_eos = decoder_hidden_states[:, -1, :]
+            mem_state = self.memory_bank.write(h_decoder_eos, write_prob, mem_state)
+            write_prob_val = write_prob
                 
-        x_proj = self.lm_head_proj(x)
+        # 5. LM Head
+        x_proj = self.lm_head_proj(decoder_hidden_states)
         logits = torch.matmul(x_proj, self.embed_tokens.weight.T)
         
         if mem_state is not None:
