@@ -267,7 +267,9 @@ def main():
 
     out_dir = '/kaggle/working/checkpoints/memorybench' if os.path.exists('/kaggle') else 'checkpoints/memorybench'
     os.makedirs(out_dir, exist_ok=True)
-    ocp.StandardCheckpointer().save(os.path.abspath(out_dir), unreplicate(state), force=True)
+    checkpointer = ocp.StandardCheckpointer()
+    checkpointer.save(os.path.abspath(out_dir), unreplicate(state), force=True)
+    checkpointer.wait_until_finished()
     print(f"✅ Saved to {out_dir}")
 
 if __name__ == '__main__':
