@@ -10,9 +10,20 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
     
     def to_torch(x, transpose=False):
         x = np.array(x)
+        is_bfloat16 = (x.dtype.name == 'bfloat16')
+        
+        if is_bfloat16:
+            x = x.astype(np.float32)
+            
         if transpose:
             x = x.T
-        return torch.from_numpy(x)
+            
+        tensor = torch.from_numpy(x)
+        
+        if is_bfloat16:
+            tensor = tensor.to(torch.bfloat16)
+            
+        return tensor
 
     # 1. Embeddings & Norm (Shared)
     state_dict['embed_tokens.weight'] = to_torch(jax_params['embed_tokens']['embedding'])
@@ -92,11 +103,13 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
     state_dict['memory_bank.fusion_proj.weight'] = to_torch(jax_params['memory_bank']['fusion_proj']['kernel'], True)
 
     # 6. RoPE frequencies (PyTorch generates this automatically, but load_state_dict expects it)
-    if hasattr(pt_model, 'rope') and hasattr(pt_model.rope, 'inv_freq'):
-        state_dict['rope.inv_freq'] = pt_model.rope.inv_freq
+    if pt_model is not None:
+        if hasattr(pt_model, 'rope') and hasattr(pt_model.rope, 'inv_freq'):
+            state_dict['rope.inv_freq'] = pt_model.rope.inv_freq
 
-    # Load into PyTorch model to verify compatibility
-    pt_model.load_state_dict(state_dict, strict=False)
+        # Load into PyTorch model to verify compatibility
+        pt_model.load_state_dict(state_dict, strict=False)
+        
     return state_dict
 
 def main():

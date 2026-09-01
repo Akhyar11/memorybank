@@ -305,12 +305,23 @@ def main():
                 print(f"          Expert load: [{expert_str}]")
                 last_log_time = now
 
+        # Explicitly delete loop variables to free up references before PyTorch conversion
+        try:
+            del batch, batch_enc, batch_dec, sharded_enc, sharded_dec, metrics
+        except NameError:
+            pass
+            
+        import gc
+        gc.collect()
+
+        # Block JAX to ensure all operations finish before we do heavy host conversions
+        jax.tree_util.tree_map(lambda x: x.block_until_ready(), state.params)
+
         # --- SAVE CHECKPOINT PYTORCH PER EPOCH ---
         print(f"\n💾 Saving PyTorch checkpoint for Epoch {epoch}...")
         ckpt_dir = '/kaggle/working/checkpoints' if os.path.exists('/kaggle') else 'checkpoints'
         os.makedirs(ckpt_dir, exist_ok=True)
         
-        import gc
         unreplicated_state = unreplicate(state)
         
         config_pt = PyTorchConfig()
@@ -323,6 +334,9 @@ def main():
         del state_dict
         del unreplicated_state
         gc.collect()
+        
+        # Block again before next epoch
+        jax.tree_util.tree_map(lambda x: x.block_until_ready(), state.params)
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")

@@ -74,13 +74,14 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare Indonesian Pretraining Dataset for JAX")
     parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size")
     parser.add_argument("--seq-len", type=int, default=1024, help="Sequence length")
-    parser.add_argument("--out-dir", type=str, default="data/pretrain", help="Output directory")
+    parser.add_argument("--input", type=str, default="data/raw/vqfat_cosmopedia_id.csv", help="Input dataset path")
+    parser.add_argument("--out-file", type=str, default="data/pretrain/vqfat_tokens.npy", help="Output .npy file path")
     args = parser.parse_args()
     
-    os.makedirs(args.out_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(args.out_file), exist_ok=True)
     
-    print("Loading VQFat Indonesian Corpus from local file...")
-    dataset = load_dataset("csv", data_files="data/raw/vqfat_cosmopedia_id.csv", split="train")
+    print(f"Loading dataset from {args.input}...")
+    dataset = load_dataset("csv", data_files=args.input, split="train")
     
     print(f"Loaded {len(dataset):,} articles.")
     
@@ -103,7 +104,7 @@ def main():
         
     chunks = tokenize_and_chunk(dataset, tokenizer, args.seq_len, text_column)
     
-    out_file = os.path.join(args.out_dir, "train_chunks.npy")
+    out_file = args.out_file
     print(f"Saving numpy array to {out_file}...")
     np.save(out_file, chunks)
     print("Done! Data is ready for JAX dataloading.")
