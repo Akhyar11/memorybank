@@ -21,8 +21,13 @@ from scripts.pytorch.pytorch_model import MAMoEForConditionalGeneration as PyTor
 # ── Optimasi Tensor Core (T4/P100 bfloat16) ─────────────────────────────────
 jax.config.update('jax_default_matmul_precision', 'bfloat16')
 
+import jax
+import jax.numpy as jnp
+from jax.experimental.compilation_cache import compilation_cache as cc
+import optax
 from flax.training import train_state
 from flax.jax_utils import replicate, unreplicate
+from tqdm import tqdm
 
 from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForConditionalGeneration
@@ -299,7 +304,7 @@ def main():
     
         dataloader = prefetch(raw_gen)   # background prefetch
         
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc=f"Epoch {epoch}"):
             global_step += 1
             # Cast to int32 for JAX
             batch         = batch.astype(np.int32)

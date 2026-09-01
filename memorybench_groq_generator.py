@@ -699,6 +699,12 @@ class GroqGenerator:
         temperature: float,
         max_retries: int = 6,
     ):
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+            
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -1236,7 +1242,9 @@ class MemoryBenchGenerator:
 
         max_attempts = episodes * 3
         attempts = 0
-        index = start_index
+        index = max(start_index, len(existing))
+
+        print(f"Resuming from index {index} (found {len(existing)} existing episodes)...")
 
         while self.stats.completed < episodes and attempts < max_attempts:
             attempts += 1
