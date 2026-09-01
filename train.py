@@ -149,23 +149,17 @@ def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs, batch_is
 
 # ── Data Loading ─────────────────────────────────────────────────────────────
 def resolve_data_paths():
-    """Pilih path dataset: Prioritaskan .npy agar RAM cepat."""
-    if os.path.exists(KAGGLE_TOKENS):
-        print(f"⚡ Fast path: loading pre-tokenized npy → {KAGGLE_TOKENS}")
-        return 'npy', KAGGLE_TOKENS, None
-    if os.path.exists(LOCAL_TOKENS):
-        print(f"⚡ Fast path: loading pre-tokenized npy → {LOCAL_TOKENS}")
-        return 'npy', LOCAL_TOKENS, None
+    """Selalu gunakan CSV agar format Q&A di-generate dengan benar."""
     if os.path.exists(KAGGLE_CSV):
-        print(f"⚠️  npy tidak ditemukan, streaming CSV → {KAGGLE_CSV}")
+        print(f"✅ Streaming CSV (Q&A Format) → {KAGGLE_CSV}")
         return 'csv', KAGGLE_CSV, KAGGLE_TOK
     if os.path.exists(LOCAL_CSV):
-        print(f"⚠️  npy tidak ditemukan, streaming CSV → {LOCAL_CSV}")
+        print(f"✅ Streaming CSV (Q&A Format) → {LOCAL_CSV}")
         return 'csv', LOCAL_CSV, LOCAL_TOK
     if os.path.exists(COLAB_CSV):
-        print(f"✅ Streaming File (dengan Regex Cleaning) → {COLAB_CSV}")
+        print(f"✅ Streaming CSV (Q&A Format) → {COLAB_CSV}")
         return 'csv', COLAB_CSV, LOCAL_TOK
-    raise FileNotFoundError("Tidak ada dataset mentah ditemukan!")
+    raise FileNotFoundError("Tidak ada file CSV dataset yang ditemukan!")
 
 def npy_epoch_generator(npy_path, total_batch_size, seq_len):
     """Load npy PENUH ke RAM (bukan mmap), yield batch acak — MAKSIMAL CEPAT."""
