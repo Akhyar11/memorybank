@@ -41,8 +41,8 @@ COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_clean.cs
 SEQ_LEN           = 1024
 ENC_SEQ_LEN       = 512
 DEC_SEQ_LEN       = 512
-LOCAL_BATCH_SIZE  = 4       # per device  → Total = 4 × num_devices
-GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step (Total Effective Batch = 32)
+LOCAL_BATCH_SIZE  = 2       # per device  → Total = 2 × num_devices
+GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step
 LOG_INTERVAL      = 10
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
 NUM_EPOCHS        = 20
