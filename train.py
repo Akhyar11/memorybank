@@ -310,15 +310,19 @@ def main():
         ckpt_dir = '/kaggle/working/checkpoints' if os.path.exists('/kaggle') else 'checkpoints'
         os.makedirs(ckpt_dir, exist_ok=True)
         
+        import gc
         unreplicated_state = unreplicate(state)
         
         config_pt = PyTorchConfig()
-        pt_model = PyTorchMAMoE(config_pt)
-        state_dict = convert_jax_to_pytorch(unreplicated_state.params, pt_model, config_pt)
+        state_dict = convert_jax_to_pytorch(unreplicated_state.params, None, config_pt)
         
         out_path = os.path.join(ckpt_dir, f'pytorch_model_epoch_{epoch}.pt')
         torch.save(state_dict, out_path)
         print(f"✅ PyTorch Checkpoint saved to: {out_path}\n")
+        
+        del state_dict
+        del unreplicated_state
+        gc.collect()
 
     total_elapsed = int(time.time() - start_time)
     print(f"\n✅ Phase 1 Complete!  Total: {total_elapsed//3600}h {(total_elapsed%3600)//60}m  |  Tokens: {total_tokens:,}")
