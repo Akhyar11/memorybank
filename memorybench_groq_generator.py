@@ -591,7 +591,14 @@ def build_system_prompt(language: str) -> str:
             "words are allowed, but do not switch languages excessively."
         )
     else:
-        lang_instruction = "Write primarily in natural Indonesian."
+        lang_instruction = (
+            "Write in highly natural, everyday conversational Indonesian (Bahasa Indonesia Sehari-hari). "
+            "Vary the persona and tone greatly between episodes: sometimes polite (saya/anda), "
+            "sometimes casual (aku/kamu), and sometimes informal/slang (gue/lu, cowok/cewek bumi). "
+            "Use natural particles like 'sih', 'nih', 'dong', 'deh', 'lho', 'ya', 'kok'. "
+            "Make it sound exactly like real humans chatting on WhatsApp or Telegram, "
+            "with realistic emotions, reactions, typos, or sudden topic changes."
+        )
 
     return f"""
 You are a high-quality synthetic conversational data generator for a research

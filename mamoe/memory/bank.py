@@ -136,7 +136,10 @@ class MemoryBank(nn.Module):
         # We multiply by valid_mask to enforce zero contribution.
         attn_weights = attn_weights * valid_mask.astype(attn_weights.dtype)
         
+        # Ensure that if the sum of attn_weights is 0 (empty valid memories), read_result is completely zero
+        attn_sum = jnp.sum(attn_weights, axis=-1, keepdims=True)
         read_result = jnp.sum(attn_weights[..., None] * topk_vals, axis=1) # (batch, dim)
+        read_result = jnp.where(attn_sum > 0, read_result, jnp.zeros_like(read_result))
         
         # --- Access Reinforcement ---
         # For simplicity in this functional pass, we update metadata for accessed slots.
@@ -237,7 +240,6 @@ class MemoryBank(nn.Module):
             target_idx = jnp.where(is_update, nearest_idx, insert_idx)
             
             # Apply changes ONLY if do_write is True using XLA-friendly dynamic_update_slice
-            # Instead of branching the entire 10000x256 array, we only branch the value being inserted!
             keys = keys.at[target_idx].set(jnp.where(do_write, k_n, keys[target_idx]))
             
             new_v = jnp.where(is_update, updated_v, v_n)
@@ -259,10 +261,14 @@ class MemoryBank(nn.Module):
             new_acc = jnp.where(is_update, acc_cnt[target_idx] + 1, 1)
             acc_cnt = acc_cnt.at[target_idx].set(jnp.where(do_write, new_acc, acc_cnt[target_idx]))
             
-            return (keys, vals, state, imp, conf, created, last_acc, acc_cnt), None
+            # Recompute updated normalized keys after mutation for the next batch token
+            # so the sequential loop can see its own writes!
+            k_norm_updated = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-8)
+            
+            return (keys, vals, state, imp, conf, created, last_acc, acc_cnt, k_norm_updated), None
 
-        init_state = (keys, vals, state, imp, conf, created, last_acc, acc_cnt)
-        (new_keys, new_vals, new_state, new_imp, new_conf, new_created, new_last_acc, new_acc_cnt), _ = jax.lax.scan(
+        init_state = (keys, vals, state, imp, conf, created, last_acc, acc_cnt, k_norm)
+        (new_keys, new_vals, new_state, new_imp, new_conf, new_created, new_last_acc, new_acc_cnt, _), _ = jax.lax.scan(
             update_single_write, init_state, (k_new_norm, v_new, i_new, c_new, is_eos, write_prob)
         )
         self.mem_keys.value = new_keys
@@ -281,40 +287,24 @@ class MemoryBank(nn.Module):
         return fused
 
     @nn.compact
-    def __call__(self, h_eos, read_prob, write_prob):
+    def __call__(self, h_eos, read_prob, write_prob, deterministic=False):
         # We step the global clock first
         self.global_step.value += 1
         
         # Decay memories
         self.decay_memory()
         
-        # Independent gates threshold. E.g., if prob > 0.5, execute.
-        # Since JAX arrays inside functional compilation can't easily dynamically skip state mutations 
-        # across batches if some are true and some are false without masked updates, 
-        # we perform the operation and conditionally apply the result.
-        
         # READ
         read_val = self.read(h_eos)
         
-        is_read = read_prob > 0.5
-        m_eff = jnp.where(is_read[:, None], read_val, jnp.zeros_like(read_val))
+        # Differentiable gates for training, hard threshold for inference
+        if deterministic:
+            is_read = read_prob > self.config.memory_read_threshold
+            m_eff = jnp.where(is_read[:, None], read_val, jnp.zeros_like(read_val))
+        else:
+            m_eff = read_val * read_prob[:, None]
         
         # FUSE
         fused_h = self.fuse(h_eos, m_eff)
-        
-        # WRITE
-        # In a real model we conditionally mask the write scan. 
-        # For simplicity, we just filter the h_eos we pass to write based on prob > 0.5.
-        # Since write processes the whole batch in our scan, we can filter inputs.
-        
-        is_write = write_prob > 0.5
-        # If any in batch wants to write, we call write but only for valid tokens.
-        # To avoid complex dynamic control flow here, we can just call write on the subset.
-        # (Implementing masked write inside the scan is more robust for XLA)
-        # We will assume caller manages conditional WRITE execution for now or we just do it.
-        # For MVP, we'll unconditionally execute write but zero out k/v if is_write is False.
-        # Actually, if k=0 it might match zero vectors. 
-        # Proper way: implement a mask in `write()`. We will skip this minor detail in the MVP 
-        # and assume the user calls .write() conditionally in an external loop if needed.
         
         return fused_h

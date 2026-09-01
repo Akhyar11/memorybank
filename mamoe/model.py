@@ -9,6 +9,7 @@ from .layers.attention import SelfAttention, CausalSelfAttention, CrossAttention
 from .layers.moe import MoELayer
 from .memory.controller import MemoryController
 from .memory.bank import MemoryBank
+from .utils import extract_last_valid_hidden, make_key_padding_mask, make_causal_mask
 
 class MAMoEEncoderBlock(nn.Module):
     config: any
@@ -127,8 +128,8 @@ class MAMoEForConditionalGeneration(nn.Module):
             features=self.config.embed_dim,
             embedding_init=nn.initializers.normal(stddev=0.02)
         )
-        self.embed_proj = nn.Dense(self.config.hidden_size, name='embed_proj')
-        self.lm_head_proj = nn.Dense(self.config.embed_dim, name='lm_head_proj')
+        self.embed_proj = nn.Dense(self.config.hidden_size, use_bias=False, name='embed_proj')
+        self.lm_head_proj = nn.Dense(self.config.embed_dim, use_bias=False, name='lm_head_proj')
         
         self.encoder = MAMoEEncoder(config=self.config, name='encoder')
         self.decoder = MAMoEDecoder(config=self.config, name='decoder')
@@ -145,29 +146,44 @@ class MAMoEForConditionalGeneration(nn.Module):
         cross_attention_mask: Optional[jax.Array] = None,
         is_eos: Optional[jax.Array] = None
     ):
+        enc_additive_mask = make_key_padding_mask(attention_mask, dtype=self.embed_tokens.embedding.dtype)
+        
         encoder_hidden_states, enc_aux_loss, enc_f_i = self.encoder(
-            self.embed_tokens, self.embed_proj, input_ids, attention_mask
+            self.embed_tokens, self.embed_proj, input_ids, enc_additive_mask
         )
         
-        h_prompt_eos = encoder_hidden_states[:, -1, :] 
+        h_prompt_eos = extract_last_valid_hidden(encoder_hidden_states, attention_mask)
         read_prob, write_prob = self.memory_controller(h_prompt_eos)
         fused_memory_context = self.memory_bank(h_prompt_eos, read_prob, write_prob) 
         
         fused_memory_context = jnp.expand_dims(fused_memory_context, axis=1)
         full_context_states = jnp.concatenate([fused_memory_context, encoder_hidden_states], axis=1)
         
-        if cross_attention_mask is not None:
-            mem_mask = jnp.zeros((cross_attention_mask.shape[0], cross_attention_mask.shape[1], cross_attention_mask.shape[2], 1))
-            full_cross_attention_mask = jnp.concatenate([mem_mask, cross_attention_mask], axis=-1)
+        if attention_mask is not None:
+            # Reconstruct cross attention mask from encoder attention mask
+            # The encoder context is memory (1 token) + encoder tokens (N tokens)
+            mem_mask = jnp.ones((attention_mask.shape[0], 1), dtype=attention_mask.dtype)
+            cross_attention_base_mask = jnp.concatenate([mem_mask, attention_mask], axis=-1)
+            full_cross_attention_mask = make_key_padding_mask(cross_attention_base_mask, dtype=self.embed_tokens.embedding.dtype)
         else:
             full_cross_attention_mask = None
 
+        # Combine causal mask with padding mask for decoder
+        bsz, dec_seq_len = decoder_input_ids.shape
+        causal_mask = make_causal_mask(dec_seq_len, dtype=self.embed_tokens.embedding.dtype)
+        dec_padding_mask = make_key_padding_mask(decoder_attention_mask, dtype=self.embed_tokens.embedding.dtype)
+        
+        if dec_padding_mask is not None:
+            dec_additive_mask = causal_mask + dec_padding_mask
+        else:
+            dec_additive_mask = causal_mask
+            
         decoder_hidden_states, dec_aux_loss, dec_f_i = self.decoder(
-            self.embed_tokens, self.embed_proj, decoder_input_ids, full_context_states, decoder_attention_mask, full_cross_attention_mask
+            self.embed_tokens, self.embed_proj, decoder_input_ids, full_context_states, dec_additive_mask, full_cross_attention_mask
         )
         
         if is_eos is not None:
-            h_decoder_eos = decoder_hidden_states[:, -1, :]
+            h_decoder_eos = extract_last_valid_hidden(decoder_hidden_states, decoder_attention_mask)
             self.memory_bank.write(h_decoder_eos, is_eos, write_prob)
             
         projected_states = self.lm_head_proj(decoder_hidden_states)

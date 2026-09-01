@@ -91,6 +91,10 @@ class MemoryBank(nn.Module):
         
         read_result = torch.sum(attn_weights.unsqueeze(-1) * topk_vals, dim=1)
         
+        # Ensure that if the sum of attn_weights is 0 (empty valid memories), read_result is completely zero
+        attn_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
+        read_result = torch.where(attn_sum > 0, read_result, torch.zeros_like(read_result))
+        
         # Access Reinforcement
         for b in range(bsz):
             valid_idx = topk_indices[b][valid_mask[b]]
@@ -103,25 +107,59 @@ class MemoryBank(nn.Module):
 
     def write(self, h_eos, write_prob, mem_state):
         bsz = h_eos.size(0)
-        k = self.k_proj(h_eos)
-        v = self.v_proj(h_eos)
-        i = torch.sigmoid(self.i_proj(h_eos)).squeeze(-1)
+        k_new = self.k_proj(h_eos)
+        v_new = self.v_proj(h_eos)
+        i_new_logits = self.i_proj(h_eos)
+        i_new = torch.sigmoid(i_new_logits).squeeze(-1)
+        c_new = torch.ones_like(i_new) * 0.5
         
-        c = write_prob.squeeze(-1) 
+        tau = self.config.memory_threshold
         
         for b in range(bsz):
-            if write_prob[b] > 0.5:
-                ptr = mem_state['ptr'][b].item()
-                capacity = self.config.memory_capacity
+            if write_prob[b, 0] >= self.config.memory_write_threshold:
+                # 1. Similarity search
+                k_n = F.normalize(k_new[b], p=2, dim=-1, eps=1e-8)
+                k_norm = F.normalize(mem_state['keys'][b], p=2, dim=-1, eps=1e-8)
                 
-                mem_state['keys'][b, ptr] = k[b]
-                mem_state['vals'][b, ptr] = v[b]
-                mem_state['importance'][b, ptr] = i[b]
-                mem_state['confidence'][b, ptr] = c[b]
-                mem_state['last_access'][b, ptr] = mem_state['global_step'][b]
-                mem_state['state'][b, ptr] = STATE_ACTIVE
+                sim = torch.mv(k_norm, k_n)
                 
-                mem_state['ptr'][b] = (ptr + 1) % capacity
+                # Restrict to ACTIVE or DORMANT
+                valid_mask = (mem_state['state'][b] != STATE_EXPIRED)
+                sim = sim.masked_fill(~valid_mask, -1.0)
                 
+                max_sim, nearest_idx = torch.max(sim, dim=0)
+                nearest_idx = nearest_idx.item()
+                
+                if max_sim.item() >= self.config.memory_update_threshold:
+                    # --- UPDATE BRANCH ---
+                    eta = mem_state['confidence'][b, nearest_idx].item()
+                    mem_state['vals'][b, nearest_idx] = (1.0 - eta) * mem_state['vals'][b, nearest_idx] + eta * v_new[b]
+                    mem_state['confidence'][b, nearest_idx] = min(mem_state['confidence'][b, nearest_idx].item() + 0.1, 1.0)
+                    mem_state['importance'][b, nearest_idx] = max(mem_state['importance'][b, nearest_idx].item(), i_new[b].item())
+                    mem_state['last_access'][b, nearest_idx] = mem_state['global_step'][b].item()
+                    mem_state['state'][b, nearest_idx] = STATE_ACTIVE
+                else:
+                    # --- INSERT BRANCH ---
+                    # Find EXPIRED slot, or DORMANT, or ACTIVE
+                    state_b = mem_state['state'][b]
+                    expired_mask = (state_b == STATE_EXPIRED)
+                    dormant_mask = (state_b == STATE_DORMANT)
+                    
+                    if expired_mask.any():
+                        insert_idx = torch.where(expired_mask)[0][0].item()
+                    elif dormant_mask.any():
+                        insert_idx = torch.where(dormant_mask)[0][0].item()
+                    else:
+                        insert_idx = 0 # Fallback to 0 if all ACTIVE
+                        
+                    mem_state['keys'][b, insert_idx] = k_new[b]
+                    mem_state['vals'][b, insert_idx] = v_new[b]
+                    mem_state['importance'][b, insert_idx] = i_new[b].item()
+                    mem_state['confidence'][b, insert_idx] = c_new[b].item()
+                    mem_state['state'][b, insert_idx] = STATE_ACTIVE
+                    mem_state['last_access'][b, insert_idx] = mem_state['global_step'][b].item()
+                    mem_state['created_at'] = mem_state.get('created_at', torch.zeros_like(mem_state['last_access']))
+                    mem_state['created_at'][b, insert_idx] = mem_state['global_step'][b].item()
+                    
         mem_state['global_step'] += 1
         return mem_state

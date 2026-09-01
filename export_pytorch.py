@@ -52,9 +52,13 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
         # MoE
         moe = jax_params['encoder'][j_prefix]['moe']
         state_dict[f'{p_prefix}.moe.router.weight'] = to_torch(moe['MoERouter_0']['gate_proj']['kernel'], True)
+        
+        gate_up_weights = moe['gate_up_proj_weight'] # (num_experts, hidden, 2*interm)
+        down_weights = moe['down_proj_weight']       # (num_experts, interm, hidden)
+        
         for j in range(config.num_experts):
-            state_dict[f'{p_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(moe['experts']['gate_up_proj']['kernel'][j], True)
-            state_dict[f'{p_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(moe['experts']['down_proj']['kernel'][j], True)
+            state_dict[f'{p_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(gate_up_weights[j], True)
+            state_dict[f'{p_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(down_weights[j], True)
             
     # 3. Decoder
     state_dict['decoder.norm.weight'] = to_torch(jax_params['decoder']['norm']['weight'])
@@ -84,9 +88,13 @@ def convert_jax_to_pytorch(jax_params, pt_model, config):
         # MoE
         moe = jax_params['decoder'][j_prefix]['moe']
         state_dict[f'{p_prefix}.moe.router.weight'] = to_torch(moe['MoERouter_0']['gate_proj']['kernel'], True)
+        
+        gate_up_weights = moe['gate_up_proj_weight'] # (num_experts, hidden, 2*interm)
+        down_weights = moe['down_proj_weight']       # (num_experts, interm, hidden)
+        
         for j in range(config.num_experts):
-            state_dict[f'{p_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(moe['experts']['gate_up_proj']['kernel'][j], True)
-            state_dict[f'{p_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(moe['experts']['down_proj']['kernel'][j], True)
+            state_dict[f'{p_prefix}.moe.experts.{j}.gate_up_proj.weight'] = to_torch(gate_up_weights[j], True)
+            state_dict[f'{p_prefix}.moe.experts.{j}.down_proj.weight'] = to_torch(down_weights[j], True)
 
     # 4. Memory Controller
     state_dict['memory_controller.read_gate.weight'] = to_torch(jax_params['memory_controller']['read_gate']['kernel'], True)

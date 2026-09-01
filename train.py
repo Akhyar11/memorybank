@@ -31,6 +31,7 @@ from tqdm import tqdm
 
 from mamoe.config import MAMoEConfig
 from mamoe.model import MAMoEForConditionalGeneration
+from mamoe.tokenization_mamoe import TokenizerSpec
 
 # ─── Path Konfigurasi ────────────────────────────────────────────────────────
 KAGGLE_TOKENS   = '/kaggle/input/datasets/akhyarsafrudin/dataset-chat/vqfat_clean_tokens.npy'
@@ -114,22 +115,27 @@ def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
     return state, memory_state
 
 # ── Training Step (pmap) ─────────────────────────────────────────────────────
-@functools.partial(jax.pmap, axis_name='batch')
-def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs, batch_is_eos):
-    labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
+@functools.partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(6,))
+def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs, batch_labels, batch_is_eos, pad_token_id):
+    labels = batch_labels
+    
+    enc_attention_mask = (batch_enc_inputs != pad_token_id).astype(jnp.int32)
+    dec_attention_mask = (batch_dec_inputs != pad_token_id).astype(jnp.int32)
 
     def loss_fn(params):
         (logits, _, _, aux_loss, avg_f_i), mutated = state.apply_fn(
             {'params': params, 'memory': memory_state},
             input_ids=batch_enc_inputs,
             decoder_input_ids=batch_dec_inputs,
+            attention_mask=enc_attention_mask,
+            decoder_attention_mask=dec_attention_mask,
             is_eos=batch_is_eos,
             mutable=['memory'],
         )
         vocab_size   = logits.shape[-1]
         log_probs    = jax.nn.log_softmax(logits, axis=-1)
         ce_loss    = -jnp.sum(jax.nn.one_hot(labels, vocab_size) * log_probs, axis=-1)
-        loss_mask  = (labels != 0).astype(jnp.float32)
+        loss_mask  = (labels != pad_token_id).astype(jnp.float32)
         mean_ce    = jnp.sum(ce_loss * loss_mask) / jnp.maximum(jnp.sum(loss_mask), 1.0)
         total_loss   = mean_ce + 0.01 * aux_loss
         return total_loss, (mean_ce, aux_loss, avg_f_i, mutated.get('memory', {}))
@@ -168,13 +174,13 @@ def npy_epoch_generator(npy_path, total_batch_size, seq_len):
     
     if os.environ.get('QUICK_TEST') == '1':
         print("\n⚠️ QUICK_TEST MODE ENABLED! Truncating data to 10 steps...")
-        tokens = tokens[: total_batch_size * SEQ_LEN * 10]
+        tokens = tokens[: total_batch_size * (seq_len + 1) * 10]
         
-    total_tokens_in_file = len(tokens)                   # full RAM load, no disk I/O during training
+    total_tokens_in_file = len(tokens)
     total  = len(tokens)
-    usable = (total // seq_len) * seq_len
-    arr    = tokens[:usable].reshape(-1, seq_len)
-    print(f"   Dataset: {arr.shape[0]:,} sequences × {seq_len} tokens ({arr.nbytes/1e6:.0f} MB in RAM)")
+    usable = (total // (seq_len + 1)) * (seq_len + 1)
+    arr    = tokens[:usable].reshape(-1, seq_len + 1)
+    print(f"   Dataset: {arr.shape[0]:,} sequences × {seq_len + 1} tokens ({arr.nbytes/1e6:.0f} MB in RAM)")
     idx = np.random.permutation(len(arr))
     for i in range(0, len(idx) - total_batch_size, total_batch_size):
         yield arr[idx[i : i + total_batch_size]]
@@ -225,7 +231,10 @@ def csv_epoch_generator(csv_path, tok_path, total_batch_size, seq_len):
         np.random.shuffle(arr)
         
         for i in range(0, len(arr) - total_batch_size, total_batch_size):
-            yield arr[i : i + total_batch_size]
+            # For CSV, we append pad_token_id at the end so it matches seq_len + 1
+            batch = arr[i : i + total_batch_size]
+            padded_batch = np.pad(batch, ((0,0), (0,1)), constant_values=pad_token_id)
+            yield padded_batch
 
 def prefetch(generator, maxsize=PREFETCH_QUEUE):
     """Jalankan data generator di background thread, buffer ke queue."""
@@ -266,6 +275,15 @@ def main():
 
 
     config = MAMoEConfig()
+    try:
+        tokenizer_spec = TokenizerSpec.from_file(LOCAL_TOK)
+        pad_token_id = tokenizer_spec.pad_token_id
+        eos_token_id = tokenizer_spec.eos_token_id
+    except Exception as e:
+        print(f"Warning: Could not load TokenizerSpec: {e}. Using pad_token_id=0, eos_token_id=2")
+        pad_token_id = 0
+        eos_token_id = 2
+        
     model  = MAMoEForConditionalGeneration(config=config)
     rng    = jax.random.PRNGKey(42)
 
@@ -280,7 +298,28 @@ def main():
     # Catatan: Memory TIDAK di-reset selama pre-training.
     # Memory dibiarkan mengakumulasi konteks dari teks secara natural.
 
-    print(f"Starting Phase 1: Full Pre-Training ({NUM_EPOCHS} Epochs) ...\n")
+    # Active Parameter Accounting Logger
+    flat_params = flax.traverse_util.flatten_dict(state.params)
+    total_params = sum(x.size for x in flat_params.values())
+    
+    # Calculate active parameters per token
+    # (Total parameters) - (Unused Expert parameters for a single token)
+    expert_params = 0
+    for k, v in flat_params.items():
+        if 'experts' in k or 'gate_up_proj_weight' in k or 'down_proj_weight' in k:
+            expert_params += v.size
+            
+    # Each token only uses `top_k` experts out of `num_experts`
+    num_experts = config.num_experts
+    top_k = config.num_experts_per_tok
+    inactive_expert_params = expert_params * (1.0 - (top_k / num_experts))
+    active_params = total_params - inactive_expert_params
+    
+    print(f"\n📊 Parameter Accounting:")
+    print(f"   Total Parameters:  {total_params:,}")
+    print(f"   Active per Token:  {int(active_params):,} ({(active_params/total_params)*100:.1f}%)")
+    
+    print(f"\nStarting Phase 1: Full Pre-Training ({NUM_EPOCHS} Epochs) ...\n")
     start_time     = time.time()
     last_log_time  = start_time
     total_tokens   = 0
@@ -303,14 +342,20 @@ def main():
             # Cast to int32 for JAX
             batch         = batch.astype(np.int32)
             
+            # batch has shape (B, SEQ_LEN + 1)
             batch_enc = batch[:, :ENC_SEQ_LEN]
-            batch_dec = batch[:, ENC_SEQ_LEN:]
+            batch_dec = batch[:, ENC_SEQ_LEN:-1]
+            batch_lbl = batch[:, ENC_SEQ_LEN+1:]
             
             sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, ENC_SEQ_LEN))
             sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
-            sharded_eos = jnp.ones((num_devices, LOCAL_BATCH_SIZE), dtype=jnp.int32)
+            sharded_lbl = batch_lbl.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
+            
+            # Determine if sequence has an EOS token
+            batch_is_eos = (batch_dec == eos_token_id).any(axis=1).astype(jnp.int32)
+            sharded_eos = batch_is_eos.reshape((num_devices, LOCAL_BATCH_SIZE))
     
-            state, memory_state, metrics = train_step(state, memory_state, sharded_enc, sharded_dec, sharded_eos)
+            state, memory_state, metrics = train_step(state, memory_state, sharded_enc, sharded_dec, sharded_lbl, sharded_eos, pad_token_id)
             total_tokens += total_batch_size * SEQ_LEN
     
             if global_step % LOG_INTERVAL == 0:
