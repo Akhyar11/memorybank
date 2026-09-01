@@ -202,7 +202,7 @@ class MemoryBank(nn.Module):
         k_norm = keys / (jnp.linalg.norm(keys, axis=-1, keepdims=True) + 1e-8)
         
         def update_single_write(state_tuple, inputs):
-            (keys, vals, state, imp, conf, created, last_acc, acc_cnt) = state_tuple
+            (keys, vals, state, imp, conf, created, last_acc, acc_cnt, k_norm) = state_tuple
             k_n, v_n, i_n, c_n, is_e, w_p = inputs
             
             # Ensure we only write if the sequence ended and the probability exceeds threshold
