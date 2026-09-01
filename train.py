@@ -70,6 +70,9 @@ def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
         params['embed_tokens']['embedding'] = jnp.array(embeds)
         params = flax.core.freeze(params)
 
+    print("Casting model parameters to bfloat16 to save VRAM...")
+    params = jax.tree_util.tree_map(lambda x: x.astype(jnp.bfloat16), params)
+
     # Cosine decay LR + warmup via optax chain
     lr_schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
