@@ -3,12 +3,12 @@ from dataclasses import dataclass
 @dataclass
 class MAMoEConfig:
     vocab_size: int = 31923         # IndoBERT vocab size
-    hidden_size: int = 256          # d = 256
+    hidden_size: int = 128          # d = 128
     embed_dim: int = 768            # IndoBERT embed dim
-    freeze_embeddings: bool = True  # Freeze embeddings during training
+    freeze_embeddings: bool = False # Allow embeddings to train
     num_hidden_layers: int = 8      # L = 8
-    num_attention_heads: int = 4    # Heads = 4 (64 dim)
-    head_dim: int = 64
+    num_attention_heads: int = 4    # Heads = 4 (32 dim)
+    head_dim: int = 32
     intermediate_size: int = 512    # d_ff = 512
     num_experts: int = 64           # E = 64
     num_experts_per_tok: int = 4    # Top-4 routing
@@ -19,7 +19,7 @@ class MAMoEConfig:
     # Memory Config
     memory_capacity: int = 10000   
     memory_top_k: int = 4          
-    memory_dim: int = 256          # Matches hidden_size
+    memory_dim: int = 128          # Matches hidden_size
     memory_threshold: float = 0.8  # Tau (relevance/update threshold)
     
     # Memory Meta-data & Scoring Hyperparameters

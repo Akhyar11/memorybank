@@ -38,14 +38,14 @@ COLAB_CSV       = '/content/drive/MyDrive/Colab Notebooks/dataset/vqfat_clean.cs
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
-SEQ_LEN           = 1024
+SEQ_LEN           = 1280
 ENC_SEQ_LEN       = 512
-DEC_SEQ_LEN       = 512
+DEC_SEQ_LEN       = 768
 LOCAL_BATCH_SIZE  = 2       # per device  → Total = 2 × num_devices
 GRAD_ACCUM_STEPS  = 4       # Akumulasi 4 step
 LOG_INTERVAL      = 10
 PREFETCH_QUEUE    = 8       # buffer batches di RAM sebelum GPU butuh
-NUM_EPOCHS        = 20
+NUM_EPOCHS        = 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 class MAMoETrainState(train_state.TrainState):
@@ -110,7 +110,7 @@ def create_train_state(rng, model, dummy_enc_input, dummy_dec_input):
 
 # ── Training Step (pmap) ─────────────────────────────────────────────────────
 @functools.partial(jax.pmap, axis_name='batch')
-def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
+def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs, batch_is_eos):
     labels = jnp.roll(batch_dec_inputs, shift=-1, axis=1).at[:, -1].set(0)
 
     def loss_fn(params):
@@ -118,6 +118,7 @@ def train_step(state, memory_state, batch_enc_inputs, batch_dec_inputs):
             {'params': params, 'memory': memory_state},
             input_ids=batch_enc_inputs,
             decoder_input_ids=batch_dec_inputs,
+            is_eos=batch_is_eos,
             mutable=['memory'],
         )
         vocab_size   = logits.shape[-1]
@@ -180,22 +181,51 @@ def npy_epoch_generator(npy_path, total_batch_size, seq_len):
         yield arr[idx[i : i + total_batch_size]]
 
 def csv_epoch_generator(csv_path, tok_path, total_batch_size, seq_len):
-    """Fallback: streaming + tokenize on-the-fly (lebih lambat)."""
+    """Q&A streaming + tokenize on-the-fly."""
     import pandas as pd
     from tokenizers import Tokenizer
-    tokenizer  = Tokenizer.from_file(tok_path)
-    for chunk in pd.read_csv(csv_path, chunksize=50000):
-        col   = next((c for c in ["text","prompt","content","completion","text_clean","article"]
-                      if c in chunk.columns), chunk.columns[0])
-        texts = chunk[col].dropna().astype(str).tolist()
+    tokenizer = Tokenizer.from_file(tok_path)
+    
+    eos_token_id = tokenizer.token_to_id("[SEP]")
+    if eos_token_id is None:
+        eos_token_id = tokenizer.token_to_id("<|im_end|>") or 2
+    bos_token_id = tokenizer.token_to_id("[CLS]")
+    if bos_token_id is None:
+        bos_token_id = tokenizer.token_to_id("<|im_start|>") or 1
         
-        ids   = []
-        for enc in tokenizer.encode_batch(texts):
-            ids.extend(enc.ids)
-        n   = len(ids) // seq_len
-        arr = np.array(ids[:n * seq_len], dtype=np.uint16).reshape(n, seq_len)
+    enc_seq_len = 512
+    dec_seq_len = 768
+    
+    for chunk in pd.read_csv(csv_path, chunksize=50000):
+        if 'prompt' not in chunk.columns or 'text' not in chunk.columns:
+            col = next((c for c in ["text","content","article"] if c in chunk.columns), chunk.columns[0])
+            prompts = [""] * len(chunk)
+            texts = chunk[col].dropna().astype(str).tolist()
+        else:
+            chunk = chunk.dropna(subset=['prompt', 'text'])
+            prompts = chunk['prompt'].astype(str).tolist()
+            texts = chunk['text'].astype(str).tolist()
+            
+        enc_texts = [f"User: {p}\nAssistant:\nAI:" for p in prompts]
+        
+        enc_ids_batch = [enc.ids for enc in tokenizer.encode_batch(enc_texts)]
+        dec_ids_batch = [enc.ids for enc in tokenizer.encode_batch(texts)]
+        
+        arr = []
+        for e_ids, d_ids in zip(enc_ids_batch, dec_ids_batch):
+            e_ids = e_ids[:enc_seq_len]
+            e_ids = e_ids + [0] * (enc_seq_len - len(e_ids))
+            
+            d_ids = [bos_token_id] + d_ids + [eos_token_id]
+            d_ids = d_ids[:dec_seq_len]
+            d_ids = d_ids + [0] * (dec_seq_len - len(d_ids))
+            
+            arr.append(e_ids + d_ids)
+            
+        arr = np.array(arr, dtype=np.uint16)
         np.random.shuffle(arr)
-        for i in range(0, n - total_batch_size, total_batch_size):
+        
+        for i in range(0, len(arr) - total_batch_size, total_batch_size):
             yield arr[i : i + total_batch_size]
 
 def prefetch(generator, maxsize=PREFETCH_QUEUE):
@@ -279,8 +309,9 @@ def main():
             
             sharded_enc = batch_enc.reshape((num_devices, LOCAL_BATCH_SIZE, ENC_SEQ_LEN))
             sharded_dec = batch_dec.reshape((num_devices, LOCAL_BATCH_SIZE, DEC_SEQ_LEN))
+            sharded_eos = jnp.ones((num_devices, LOCAL_BATCH_SIZE), dtype=jnp.int32)
     
-            state, memory_state, metrics = train_step(state, memory_state, sharded_enc, sharded_dec)
+            state, memory_state, metrics = train_step(state, memory_state, sharded_enc, sharded_dec, sharded_eos)
             total_tokens += total_batch_size * SEQ_LEN
     
             if global_step % LOG_INTERVAL == 0:
@@ -307,7 +338,7 @@ def main():
 
         # Explicitly delete loop variables to free up references before PyTorch conversion
         try:
-            del batch, batch_enc, batch_dec, sharded_enc, sharded_dec, metrics
+            del batch, batch_enc, batch_dec, sharded_enc, sharded_dec, sharded_eos, metrics
         except NameError:
             pass
             

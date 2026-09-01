@@ -4,14 +4,10 @@ import time
 import torch
 import torch.nn.functional as F
 from tokenizers import Tokenizer
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# Path to the scripts folder
 sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts', 'pytorch'))
 from pytorch_model import MAMoEForConditionalGeneration, MAMoEConfig
 
-def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0.7, top_p=0.9, mem_state=None):
+def generate(model, tokenizer, device, prompt, max_new_tokens=100, temperature=0.7, top_p=0.9, mem_state=None):
     model.eval()
     
     eos_token_id = tokenizer.token_to_id("[SEP]") 
@@ -22,14 +18,14 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
     if bos_token_id is None:
         bos_token_id = tokenizer.token_to_id("<|im_start|>")
     if bos_token_id is None:
-        bos_token_id = 1 # Fallback
+        bos_token_id = 1 # Fallback to 1 if unknown
         
     input_ids = tokenizer.encode(prompt).ids
     input_tensor = torch.tensor([input_ids], dtype=torch.long).to(device)
     
     decoder_input_ids = torch.tensor([[bos_token_id]], dtype=torch.long).to(device)
     
-    print("\nAI: ", end="", flush=True)
+    print(f"\nPrompt: {prompt}\nAI: ", end="", flush=True)
     start_time = time.time()
     num_generated = 0
     
@@ -52,7 +48,7 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
             full_context_states = encoder_hidden_states
             
         encoder_outputs = (full_context_states, write_prob, mem_state)
-        
+
         past_key_values = None
         generated_tokens = []
         printed_len = 0
@@ -60,12 +56,11 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
         for i in range(max_new_tokens):
             is_eos = (i == max_new_tokens - 1)
             
-            # Forward pass skipping encoder, using KV cache
+            # Forward pass using KV Cache
             curr_decoder_input_ids = decoder_input_ids[:, -1:] if past_key_values is not None else decoder_input_ids
             
             out = model(input_tensor, curr_decoder_input_ids, mem_state=mem_state, is_eos=is_eos, 
                         encoder_outputs=encoder_outputs, past_key_values=past_key_values, use_cache=True)
-            
             if mem_state is not None:
                 logits, mem_state, write_prob, past_key_values = out
             else:
@@ -82,7 +77,6 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
             else:
                 next_token_logits = next_token_logits / temperature
                 
-                # Top-p sampling
                 if top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -98,7 +92,6 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
                 next_token = torch.multinomial(probs, num_samples=1).item()
             
             if next_token == eos_token_id:
-                # Force memory write before exiting early
                 out = model(input_tensor, decoder_input_ids, mem_state=mem_state, is_eos=True)
                 if mem_state is not None:
                     _, mem_state, write_prob = out
@@ -110,14 +103,9 @@ def generate(model, tokenizer, device, prompt, max_new_tokens=150, temperature=0
             print(new_str, end="", flush=True)
             printed_len = len(full_str)
             
-            # Append next token to decoder input
             decoder_input_ids = torch.cat([decoder_input_ids, torch.tensor([[next_token]], device=device)], dim=1)
             num_generated += 1
             
-            # Print Memory Write Event if prob > 0.5
-            if write_prob is not None and write_prob[0].item() > 0.5:
-                print(f"\n\033[92m[💾 AI menyimpan interaksi ini ke Memory Bank!]\033[0m")
-                
     end_time = time.time()
     elapsed = end_time - start_time
     tok_per_sec = num_generated / elapsed if elapsed > 0 else 0
@@ -133,48 +121,30 @@ def main():
     config = MAMoEConfig()
     model = MAMoEForConditionalGeneration(config)
     
-    if not os.path.exists(model_path):
-        print(f"Error: {model_path} tidak ditemukan. Harap pastikan path model benar.")
-        return
-        
+    print(f"Loading state dict from {model_path}...")
     state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
     model.load_state_dict(state_dict, strict=False)
     
     if hasattr(model, 'stack_experts'):
         model.stack_experts()
-    
+        
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Menggunakan perangkat: {device}")
     model.to(device)
     
-    print("\n✅ Siap! Ketik 'quit' atau 'exit' untuk keluar.\n")
-    
-    # Initialize Memory State!
     mem_state = model.memory_bank.init_state(bsz=1, device=device)
     
-    while True:
-        try:
-            user_input = input("Anda: ")
-            if user_input.lower() in ['quit', 'exit']:
-                break
-                
-            prompt = f"User: {user_input}\nAssistant:"
-            
-            # PENTING: Pass mem_state and receive updated mem_state
-            mem_state = generate(
-                model=model,
-                tokenizer=tokenizer,
-                device=device,
-                prompt=prompt,
-                max_new_tokens=150,
-                temperature=0.7,
-                top_p=0.9,
-                mem_state=mem_state
-            )
-            
-        except KeyboardInterrupt:
-            print("\nSampai jumpa!")
-            break
+    prompt = "User: Halo, bagaimana kabarmu hari ini?\nAssistant:"
+    mem_state = generate(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        prompt=prompt,
+        max_new_tokens=50,
+        temperature=0.7,
+        top_p=0.9,
+        mem_state=mem_state
+    )
 
 if __name__ == "__main__":
     main()

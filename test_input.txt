@@ -1,0 +1,3 @@
+Halo, kamu siapa?
+Jelaskan tentang cara kerjamu!
+quit
