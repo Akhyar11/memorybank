@@ -200,6 +200,10 @@ def csv_epoch_generator(csv_path, tok_path, total_batch_size, seq_len):
     if bos_token_id is None:
         bos_token_id = tokenizer.token_to_id("<|im_start|>") or 1
         
+    pad_token_id = tokenizer.token_to_id("[PAD]")
+    if pad_token_id is None:
+        pad_token_id = 0
+        
     enc_seq_len = 512
     dec_seq_len = 768
     
