@@ -86,8 +86,7 @@ class MoELayer(nn.Module):
         h = jnp.einsum('b k d, b k d h -> b k h', x_expanded.repeat(self.config.num_experts_per_tok, axis=1), w_gate_up)
         
         # SwiGLU
-        h1, h2 = jnp.split(h, 2, axis=-1)
-        h_act = SwiGLU()(h1) * h2
+        h_act = SwiGLU()(h)
         
         # Compute Down Proj
         # (batch*seq_len, top_k, intermediate_size) @ (batch*seq_len, top_k, intermediate_size, hidden_size)
