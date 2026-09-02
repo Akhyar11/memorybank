@@ -25,6 +25,8 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.compilation_cache import compilation_cache as cc
 import optax
+import flax
+import flax.traverse_util
 from flax.training import train_state
 from flax.jax_utils import replicate, unreplicate
 from tqdm import tqdm
